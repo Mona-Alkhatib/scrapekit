@@ -2,7 +2,7 @@
 
 This document explains how scrapekit works, in plain terms. It is updated after every build round.
 
-scrapekit is a general tool for turning public websites and their linked files into sourced, versioned data. The first source is CreateTO (createto.ca). Adding another website means adding one small config file, not changing the crawler (see section 4).
+scrapekit is a general tool for turning public websites and their linked files into sourced, versioned data. The first source is CreateTO (createto.ca). Adding another website means adding one small config file, not changing the crawler (see section 5).
 
 ## 1. The goal in one paragraph
 
@@ -20,7 +20,25 @@ Visit every public page on createto.ca, download every file those pages link to 
 | Most PDFs live on `a-us.storyblok.com`, others on `toronto.ca` | Files on other hosts are allowed. We fetch the file, but we do not crawl those other sites. |
 | `/system/debug` is listed in the sitemap | Some public URLs are not useful. We skip them on purpose and log why. |
 
-## 3. Big picture
+## 3. The stack, and why
+
+| Tool | What it does here | Why we chose it | Alternatives we considered |
+|---|---|---|---|
+| **Python 3.11** | Everything | Best ecosystem for scraping, PDFs and LLM clients. Easy for any data engineer to read and extend. | Go or Rust would be faster, but speed is not the limit here (politeness is: 1 request per second per host). |
+| **uv** | Installs dependencies, runs the CLI | One command setup (`uv sync`), a lock file so every machine gets the same versions, and very fast. | pip + venv (slower, no lock file by default), Poetry (heavier). |
+| **httpx** (async) | All HTTP requests | Async, so files on other hosts download in parallel while each host still gets only 1 request per second. Supports streaming (to stop huge files early), redirects, timeouts, and has a built-in way to fake responses in tests (respx). | requests (no async), aiohttp (lower level, no easy test mocking). |
+| **No Scrapy** | | For ~250 pages, a small asyncio crawler is easier to read, explain and test line by line. | Scrapy is the right call for many large sites; Part 2 could move to it or to a queue-based worker design. |
+| **No headless browser** | | The site is rendered on the server (Next.js), so the HTML already contains the content and data. A browser would be about 10x slower and heavier. | Playwright, if a future source only renders in the browser. |
+| **selectolax** (lexbor) | Parses HTML to find links and text | Very fast, small, and follows the modern HTML5 standard. | BeautifulSoup (simpler API but much slower), lxml. |
+| **defusedxml** | Parses sitemaps | Safe against malicious XML (entity expansion attacks), since sitemaps come from outside. | The standard library XML parser, which is not hardened. |
+| **PyMuPDF** | Reads PDF text page by page, and metadata | Fast, reliable text extraction with exact page numbers, which we need to cite facts. | pdfplumber (great for tables, slower), pypdf (weaker on messy PDFs). |
+| **SQLite** | Stores documents, versions, facts, skips, runs | Zero setup, one file to hand to another service, real SQL for queries and checks. | Postgres is the next step when many workers write at once (Part 2). |
+| **Files named by SHA-256** | Raw copies of pages and files | Identical content is stored once, and the hash doubles as the change detector. | Storing blobs in the database (makes it huge), naming by URL (breaks on changes). |
+| **OpenRouter** (via the OpenAI SDK) | LLM calls for PDFs | One API key for many model providers, so we can switch to a cheaper or better model by changing one setting. It reports the real cost of each call, which we sum per run. | Calling one provider directly (locks us in, cost must be computed by hand). |
+| **google/gemini-3.1-flash-lite** (default model) | Reads PDF text, returns structured facts | Cheap ($0.25 per million input tokens, $1.50 per million output), very long context, supports strict JSON schema output. Good enough for "find addresses, dates and decisions with a quote". | Larger models cost 3x to 10x more; worth testing on a small labeled sample before switching. Configurable with `--llm-model`. |
+| **pytest + respx** | Tests | respx fakes the website, so tests run offline in under a second and never touch CreateTO. | Recording real responses (brittle, and repeatedly hits the real site). |
+
+## 4. Big picture
 
 ```mermaid
 flowchart LR
@@ -38,7 +56,7 @@ flowchart LR
     I --> J[export/*.jsonl]
 ```
 
-## 4. The pieces (one job each)
+## 5. The pieces (one job each)
 
 ### Sources: one file per website
 
@@ -73,9 +91,12 @@ A test (`test_a_new_source_needs_only_a_config`) proves this: it crawls a made-u
 | `blobs.py` | Saves raw bytes to `data/raw/ab/abcdef....pdf`, named by SHA-256, so identical content is stored once. |
 | `db.py` | SQLite tables (below). The crawler never writes SQL directly. |
 | `metrics.py` | Counts everything in a run and writes `runs/<run_id>.md` and `.json`. |
-| `cli.py` | `uv run scrapekit crawl <source>` and `uv run scrapekit sources` |
+| `extract/` | Rule-based extractors: `storyblok`, `generic_html`, `pdf`. |
+| `extract_stage.py` | Runs pass 1 (rules) and pass 2 (LLM) over saved copies. |
+| `llm.py` | OpenRouter client, prompt, JSON schema, excerpt check. |
+| `cli.py` | `scrapekit run / crawl / extract <source>` and `scrapekit sources` |
 
-## 5. Extraction: from saved copies to facts
+## 6. Extraction: from saved copies to facts
 
 Extraction is a separate stage that only reads saved copies, never the website. So it can be re-run any time (for example after improving an extractor) with zero requests to the site.
 
@@ -97,7 +118,7 @@ Storing one row per field (instead of one wide row per project) makes history si
 |---|---|---|
 | `storyblok` | createto.ca project and news pages | Reads the CMS record embedded in the page (`__NEXT_DATA__` JSON). Exact values, free, no AI. Named after the technology, so other Storyblok sites can reuse it. |
 | `generic` | Any HTML page, and static pages on createto.ca | Title, meta description, headings, main text. Works on any site. |
-| `pdf` | Every linked PDF | Text of each page (saved with 1-based page numbers for citing), page count, PDF metadata dates, first page excerpt. Scanned PDFs with no text are logged as `no_text_layer`. |
+| `pdf` (pass 1) | Every linked PDF | Text of each page (saved with 1-based page numbers for citing), page count, PDF metadata dates, first page excerpt. Scanned PDFs with no text are logged as `no_text_layer`. |
 
 A source picks its page extractor in its config (`page_extractor="storyblok"`). The fallback is `generic`.
 
@@ -127,7 +148,49 @@ Nothing is overwritten. For any field you can see every value it ever had, when 
 
 The `extractions` table remembers (url, content hash, extractor version). If a document's content did not change, its extraction is skipped. If an extractor is improved, its version number is bumped and everything is re-extracted once from the saved copies.
 
-## 6. Data model
+### Pass 2: the LLM reads PDFs (paid, optional)
+
+Rules cannot read meaning from a 40 page board report. For that, an LLM reads each PDF that has text and returns facts with citations.
+
+```mermaid
+flowchart LR
+    P[PDF page text<br/>from pdf_pages] --> T["Page-tagged text<br/>[page 1] ... [page 2] ...<br/>capped at 40k chars"]
+    T --> C{In llm_cache?<br/>same hash + model + prompt}
+    C -- yes --> R[Reuse answer, cost 0]
+    C -- no --> L[OpenRouter call<br/>strict JSON schema]
+    L --> R2[Answer + real cost]
+    R --> V{Excerpt really on<br/>the cited page?}
+    R2 --> V
+    V -- yes --> K[Keep as fact, method=llm]
+    V -- no --> D[Drop, count as dropped]
+```
+
+**What we ask for** (strict JSON schema, so the answer is always machine readable):
+- `doc_type` from a fixed list (board agenda, minutes, staff report, plan or study, brochure, ...)
+- `title`, `document_date`, `organization`, a one or two sentence `summary`
+- up to 15 `facts`, each with `kind` (address, project, decision, amount, date, phase, organization), `value`, `page`, and an exact `excerpt` of 5 to 25 words
+
+**How we keep it honest and cheap:**
+
+| Concern | What we do |
+|---|---|
+| Made-up facts | Every fact must quote the page. We check the quote is really there, ignoring case, spacing and punctuation. If not, the fact is dropped and counted in the run report. The check allows three real-world PDF quirks we found in testing: a sentence that runs over a page break, numbers split by the PDF text layer (`50 0,000`), and a page footer sitting inside the quoted sentence (the quote may be split once into two verbatim parts of 4+ words, at most 300 characters apart). A quote stitched together with "..." is still rejected. |
+| Wrong page numbers | Same check: the quote must be on the cited page, and the page must exist. |
+| Paying twice | Answers are cached by content hash + model + prompt version. An unchanged PDF is never sent again, even if it appears under a second URL. Changing the model or prompt re-runs only what is needed. Improving the excerpt check has its own version number and re-checks cached answers for free. `--llm-limit` counts only paid calls. |
+| Huge documents | Text is capped at 40,000 characters (about 10,000 tokens). Facts from a cut document are marked `(truncated)` in their locator. |
+| Slow runs | Up to 8 calls at once. |
+| API errors or bad JSON | Retries (3), then the document is logged as `llm_error` and the run continues. Rule-based facts for it are still saved. |
+| Real cost | OpenRouter returns the actual cost of every call. We add it up per run. |
+| Runaway spend | Hard budget per run (default $0.50, `--llm-budget`). Once reached, no new calls start; the remaining PDFs are logged as `llm_budget_reached` and picked up next run. `--llm-dry-run` shows the number of PDFs and the estimated cost without calling anything. |
+| Rule facts vs LLM facts | Stored with `method = parse` or `llm`, and compared separately, so one never overwrites the other. |
+
+Run without the LLM: `uv run scrapekit run createto --no-llm`. Try it on a few files first: `--llm-limit 10`.
+
+Dry-run estimate on the real crawl (466 PDFs with text): about 1.49M input tokens, estimated $0.93 for the whole first run with the default model.
+
+Trial on 10 real PDFs: $0.0152 actual (estimate $0.02), 4.9 seconds, 0 failures. Doc types, dates, organizations, addresses and project names were correct on manual review.
+
+## 7. Data model
 
 ```mermaid
 erDiagram
@@ -145,18 +208,20 @@ erDiagram
     links { text src; text dst }
     facts { int id PK; text entity_type; text entity_key; text field; text value; text source_url; text content_hash; text locator; text valid_from; text valid_to; int superseded_by }
     pdf_pages { text content_hash; int page_number; text text }
+    llm_cache { text content_hash; text model_key; text response; real cost_usd }
 ```
 
 - **documents**: one row per URL we know (page or file), tagged with its source, with the latest status, ETag and hash.
 - **snapshots**: one row per *distinct version* of a URL. Same content again does not add a row. A new row means the source changed, and the old version is still on disk. This is our history of the raw source.
 - **skips**: every link we did not use, with a reason: `off_domain`, `excluded_path`, `robots_disallowed`, `http_404`, `network_error`, `too_large`, `non_http_link`, `max_pages`.
 - **links**: which page linked to which URL, so every file can be traced back to the page that mentioned it.
-- **facts**: one row per field of one entity, with source, locator and validity dates (section 5).
+- **facts**: one row per field of one entity, with source, locator and validity dates (section 6).
 - **extractions**: which document versions were already extracted, and any failures.
 - **pdf_pages**: text of each PDF page, keyed by content hash and page number.
+- **llm_cache**: every paid LLM answer, keyed by content hash and model + prompt version, with tokens and cost.
 - **runs**: one row per run with all the metrics.
 
-## 7. What happens on a repeat run
+## 8. What happens on a repeat run
 
 ```mermaid
 flowchart TD
@@ -172,7 +237,7 @@ flowchart TD
 
 "Unchanged" means no new snapshot, so the extraction step (and any paid AI call) is skipped for it.
 
-## 8. Being polite (not DDoS-ing the site)
+## 9. Being polite (not DDoS-ing the site)
 
 - At most 1 request per second **per host**, no matter how many workers run.
 - A clear `User-Agent` that says what we are.
@@ -180,7 +245,7 @@ flowchart TD
 - Retries back off (1s, 2s, 4s) and respect `Retry-After`.
 - Conditional GETs mean a repeat run downloads almost nothing.
 
-## 9. Decisions and trade-offs
+## 10. Decisions and trade-offs
 
 | Decision | Why | What we gave up |
 |---|---|---|
@@ -192,12 +257,12 @@ flowchart TD
 | Rules first, AI only for PDFs | Exact, free and testable where the data is structured | Free text inside pages is not mined for facts yet |
 | Hash raw bytes for change detection | Exact and simple | Next.js pages may change bytes on every deploy without real content changes. Fact-level comparison handles this: a cosmetic change re-runs the cheap parser, but no fact changes and no AI call is made. |
 
-## 10. Build rounds
+## 11. Build rounds
 
 | Round | Scope | Status |
 |---|---|---|
 | 1 | Polite crawler, sitemap + link walk, raw copies, skip log, run metrics, pluggable sources | Done |
 | 2 | Extract fields from HTML (Next.js JSON) and text + page numbers from PDFs, fact history | Done |
-| 3 | OpenRouter extraction for PDFs only, cached by hash, real cost tracking | Next |
+| 3 | OpenRouter extraction for PDFs only, cached by hash, real cost tracking | In progress |
 | 4 | Record history (corrections), replay mode for the 3 variants, JSONL export | |
 | 5 | Two real runs, results table, README polish | |

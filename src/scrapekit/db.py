@@ -93,6 +93,18 @@ CREATE TABLE IF NOT EXISTS extractions (
     PRIMARY KEY (url, content_hash, extractor)
 );
 
+-- Paid LLM answers, keyed by content and model+prompt version. A hit costs nothing.
+CREATE TABLE IF NOT EXISTS llm_cache (
+    content_hash  TEXT NOT NULL,
+    model_key     TEXT NOT NULL,               -- model|prompt version
+    response      TEXT NOT NULL,               -- JSON
+    input_tokens  INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cost_usd      REAL NOT NULL,
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (content_hash, model_key)
+);
+
 CREATE TABLE IF NOT EXISTS pdf_pages (
     content_hash TEXT NOT NULL,
     page_number  INTEGER NOT NULL,             -- 1-based, as a person would cite it
@@ -232,19 +244,38 @@ class Store:
             [(content_hash, i + 1, text) for i, text in enumerate(pages)],
         )
 
-    def apply_facts(self, source: str, url: str, content_hash: str, facts: list) -> Counter:
+    def pdf_pages(self, content_hash: str) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT text FROM pdf_pages WHERE content_hash = ? ORDER BY page_number", (content_hash,)
+        ).fetchall()
+        return [r["text"] for r in rows]
+
+    def llm_cache_get(self, content_hash: str, model_key: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM llm_cache WHERE content_hash = ? AND model_key = ?", (content_hash, model_key)
+        ).fetchone()
+
+    def llm_cache_put(self, content_hash: str, model_key: str, response: str, tokens_in: int, tokens_out: int, cost: float) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO llm_cache VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (content_hash, model_key, response, tokens_in, tokens_out, cost, utcnow()),
+        )
+
+    def apply_facts(self, source: str, url: str, content_hash: str, facts: list, method: str = "parse") -> Counter:
         """Compares new facts from one document with the current ones and records the difference.
 
         new: field seen for the first time. updated: value changed, old row closed and linked.
         unchanged: same value, only last_confirmed_run moves. removed: field no longer present.
+        Only facts made by the same method are compared, so rule facts and LLM facts never cancel out.
         """
         now = utcnow()
         counts: Counter = Counter()
         current = {
             (r["entity_type"], r["entity_key"], r["field"]): r
             for r in self.conn.execute(
-                "SELECT id, entity_type, entity_key, field, value FROM facts WHERE source_url = ? AND valid_to IS NULL",
-                (url,),
+                "SELECT id, entity_type, entity_key, field, value FROM facts"
+                " WHERE source_url = ? AND method = ? AND valid_to IS NULL",
+                (url, method),
             )
         }
         seen = set()

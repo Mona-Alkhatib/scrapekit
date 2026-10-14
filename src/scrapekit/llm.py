@@ -1,0 +1,206 @@
+"""PDF fact extraction with an LLM through OpenRouter.
+
+Design rules:
+- Only text the PDF really contains is sent, tagged by page, so the model can cite pages.
+- The model must answer in a strict JSON schema.
+- Every fact must quote a short excerpt; we check that the excerpt really appears on the
+  cited page and drop the fact if it does not (a cheap hallucination guard).
+- Results are cached by (content hash, model, prompt version), so unchanged files are never paid for twice.
+"""
+
+import json
+import os
+import re
+from dataclasses import dataclass
+
+from openai import AsyncOpenAI
+
+PROMPT_VERSION = 1
+DEFAULT_MODEL = "google/gemini-3.1-flash-lite"
+MAX_INPUT_CHARS = 40_000  # about 10k tokens; long reports are cut and marked truncated
+DEFAULT_RUN_BUDGET_USD = 0.50  # hard stop per run; protects the shared API credit
+
+# USD per million tokens (input, output), from openrouter.ai/api/v1/models on 2026-10-14.
+# Only used for the dry-run estimate; real cost always comes from OpenRouter's response.
+KNOWN_PRICES = {
+    "google/gemini-3.1-flash-lite": (0.25, 1.50),
+    "google/gemini-2.5-flash-lite": (0.10, 0.40),
+    "google/gemini-2.5-flash": (0.30, 2.50),
+    "openai/gpt-5-mini": (0.25, 2.00),
+    "anthropic/claude-haiku-4.5": (1.00, 5.00),
+}
+EST_OUTPUT_TOKENS = 800
+PROMPT_OVERHEAD_TOKENS = 600  # system prompt + JSON schema
+
+
+def estimate_cost(model: str, pages_per_doc: list[list[str]]) -> tuple[int, float | None]:
+    """Rough cost before calling: about 4 characters per token."""
+    tokens_in = sum(len(build_document_text(p)[0]) // 4 + PROMPT_OVERHEAD_TOKENS for p in pages_per_doc)
+    price = KNOWN_PRICES.get(model)
+    if price is None:
+        return tokens_in, None
+    cost = tokens_in / 1e6 * price[0] + len(pages_per_doc) * EST_OUTPUT_TOKENS / 1e6 * price[1]
+    return tokens_in, cost
+
+DOC_TYPES = [
+    "board_agenda", "board_minutes", "committee_agenda", "committee_minutes", "staff_report",
+    "annual_report", "financial_statement", "plan_or_study", "presentation", "brochure_or_listing",
+    "notice", "policy", "procurement", "other",
+]
+FACT_KINDS = ["address", "project", "decision", "amount", "date", "phase", "organization", "other"]
+
+SYSTEM_PROMPT = """You extract facts from public documents published by CreateTO, the City of Toronto's real estate agency.
+The document text is split into pages marked [page N]. Use only what the text says. Do not guess.
+For every fact give the page number where it appears and a short excerpt copied exactly from that page (5 to 25 words).
+Prefer facts a researcher tracking city land and development would want: property addresses, project names,
+board or committee decisions, dollar amounts, key dates, and project phases.
+Return at most 15 facts. If a field is unknown, use null."""
+
+SCHEMA = {
+    "name": "document_facts",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["doc_type", "title", "document_date", "organization", "summary", "facts"],
+        "properties": {
+            "doc_type": {"type": "string", "enum": DOC_TYPES},
+            "title": {"type": ["string", "null"]},
+            "document_date": {"type": ["string", "null"], "description": "YYYY-MM-DD if stated in the text"},
+            "organization": {"type": ["string", "null"], "description": "Body that issued it, e.g. CreateTO Board of Directors"},
+            "summary": {"type": "string", "description": "One or two plain sentences"},
+            "facts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["kind", "value", "page", "excerpt"],
+                    "properties": {
+                        "kind": {"type": "string", "enum": FACT_KINDS},
+                        "value": {"type": "string"},
+                        "page": {"type": "integer"},
+                        "excerpt": {"type": "string"},
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+@dataclass
+class LlmResult:
+    data: dict
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    truncated: bool
+
+
+def build_document_text(pages: list[str]) -> tuple[str, bool]:
+    parts, size = [], 0
+    for number, text in enumerate(pages, start=1):
+        chunk = f"[page {number}]\n{' '.join(text.split())}\n"
+        if size + len(chunk) > MAX_INPUT_CHARS:
+            return "".join(parts), True
+        parts.append(chunk)
+        size += len(chunk)
+    return "".join(parts), False
+
+
+VERIFY_VERSION = 4  # bump when the excerpt check changes; re-checks reuse cached answers for free
+
+
+def _norm(text: str) -> str:
+    """Lowercase letters, digits and $ % only. Removing all spacing also survives PDF text
+    layers that split words or numbers oddly (for example "50 0,000" for "500,000")."""
+    return re.sub(r"[^a-z0-9$%]+", "", text.lower())
+
+
+MAX_GAP_CHARS = 300  # room for a page footer or header between the two halves of a quote
+MIN_SIDE_WORDS = 4  # each side of the gap must still be a real, verbatim phrase
+
+
+def excerpt_on_page(excerpt: str, page_text: str) -> bool:
+    """True if the excerpt (ignoring case, spacing and punctuation) appears in the text.
+
+    If not found whole, it may be split once into two parts (4+ words each) that both appear
+    word for word, in order, close together.
+    This allows a running page header or footer inside the quote, but nothing invented.
+    """
+    needle, hay = _norm(excerpt), _norm(page_text)
+    if not needle:
+        return False
+    if needle in hay:
+        return True
+    words = excerpt.split()
+    for cut in range(MIN_SIDE_WORDS, len(words) - MIN_SIDE_WORDS + 1):
+        first, second = _norm(" ".join(words[:cut])), _norm(" ".join(words[cut:]))
+        start = hay.find(first)
+        while start != -1:
+            after = start + len(first)
+            if second in hay[after: after + MAX_GAP_CHARS + len(second)]:
+                return True
+            start = hay.find(first, start + 1)
+    return False
+
+
+def verify_facts(facts: list[dict], pages: list[str]) -> tuple[list[dict], list[dict]]:
+    """Keeps a fact only if its excerpt is on the cited page. A quote may run over the
+    page break into the previous or next page, since sentences often do."""
+    good, bad = [], []
+    for fact in facts:
+        page, excerpt = fact.get("page"), fact.get("excerpt", "")
+        ok = False
+        if isinstance(page, int) and 1 <= page <= len(pages):
+            i = page - 1
+            windows = [pages[i], "\n".join(pages[max(0, i - 1): i + 1]), "\n".join(pages[i: i + 2])]
+            ok = any(excerpt_on_page(excerpt, w) for w in windows)
+        (good if ok else bad).append(fact)
+    return good, bad
+
+
+class OpenRouterExtractor:
+    def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None):
+        key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            raise RuntimeError("OPENROUTER_API_KEY is not set")
+        self.model = model
+        self.client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=key, max_retries=3, timeout=120)
+
+    @property
+    def cache_key_suffix(self) -> str:
+        """Identifies a paid answer. Changing the model or prompt means a new paid call."""
+        return f"{self.model}|v{PROMPT_VERSION}"
+
+    async def extract(self, url: str, pages: list[str]) -> LlmResult:
+        text, truncated = build_document_text(pages)
+        resp = await self.client.chat.completions.create(
+            model=self.model,
+            temperature=0,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Source URL: {url}\n\n{text}"},
+            ],
+            response_format={"type": "json_schema", "json_schema": SCHEMA},
+            extra_body={"usage": {"include": True}},  # OpenRouter then returns the real cost
+        )
+        content = resp.choices[0].message.content or ""
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"model returned invalid JSON: {content[:200]!r}") from exc
+        usage = resp.usage
+        cost = float((usage.model_extra or {}).get("cost") or 0.0) if usage else 0.0
+        return LlmResult(
+            data=data,
+            model=resp.model or self.model,
+            input_tokens=usage.prompt_tokens if usage else 0,
+            output_tokens=usage.completion_tokens if usage else 0,
+            cost_usd=cost,
+            truncated=truncated,
+        )
+
+    async def close(self) -> None:
+        await self.client.close()

@@ -9,16 +9,20 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import secrets
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 from .config import Settings
 from .crawler import Crawler
 from .db import Store, connect
 from .extract_stage import run_extract
 from .fetcher import Fetcher
+from .llm import DEFAULT_MODEL, DEFAULT_RUN_BUDGET_USD, OpenRouterExtractor
 from .metrics import RunStats
 from .sources import SOURCES, Source, get_source
 
@@ -27,7 +31,11 @@ def new_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(2)
 
 
-async def run_pipeline(settings: Settings, source: Source, crawl: bool = True, extract: bool = True) -> RunStats:
+async def run_pipeline(
+    settings: Settings, source: Source, crawl: bool = True, extract: bool = True,
+    llm: OpenRouterExtractor | None = None, llm_limit: int | None = None,
+    llm_budget: float = DEFAULT_RUN_BUDGET_USD, llm_dry_run: bool = False,
+) -> RunStats:
     mode = "+".join(name for name, on in (("crawl", crawl), ("extract", extract)) if on)
     run_id = new_run_id()
     stats = RunStats(run_id=run_id, mode=f"{mode}:{source.name}")
@@ -41,7 +49,12 @@ async def run_pipeline(settings: Settings, source: Source, crawl: bool = True, e
             finally:
                 await fetcher.close()
         if extract:
-            run_extract(source, store, stats)
+            try:
+                await run_extract(source, store, stats, llm=llm, llm_limit=llm_limit,
+                                  llm_budget=llm_budget, llm_dry_run=llm_dry_run)
+            finally:
+                if llm is not None:
+                    await llm.close()
     finally:
         stats.finish()
         store.finish_run(json.dumps(stats.to_dict()))
@@ -72,8 +85,15 @@ def main() -> None:
         p.add_argument("--max-pages", type=int, help="Override the source's page limit (handy for smoke tests).")
         p.add_argument("--delay", type=float, default=Settings.seconds_between_requests,
                        help="Seconds between requests to the same host (default 1.0).")
+        p.add_argument("--no-llm", action="store_true", help="Skip the paid LLM pass on PDFs.")
+        p.add_argument("--llm-model", default=os.environ.get("SCRAPEKIT_LLM_MODEL", DEFAULT_MODEL))
+        p.add_argument("--llm-limit", type=int, help="Send at most N new PDFs to the LLM (for trying it out).")
+        p.add_argument("--llm-budget", type=float, default=DEFAULT_RUN_BUDGET_USD,
+                       help=f"Stop starting new LLM calls once this run has spent this many USD (default {DEFAULT_RUN_BUDGET_USD}).")
+        p.add_argument("--llm-dry-run", action="store_true", help="Show how many PDFs would go to the LLM and the estimated cost. No calls.")
         p.add_argument("-v", "--verbose", action="store_true")
 
+    load_dotenv()
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO if getattr(args, "verbose", False) else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -88,5 +108,12 @@ def main() -> None:
         settings = replace(Settings(), data_dir=args.data_dir, runs_dir=args.runs_dir,
                            seconds_between_requests=args.delay)
         stages = {"run": (True, True), "crawl": (True, False), "extract": (False, True)}[args.command]
-        stats = asyncio.run(run_pipeline(settings, source, *stages))
+        llm = None
+        if stages[1] and not args.no_llm:
+            if os.environ.get("OPENROUTER_API_KEY") or args.llm_dry_run:
+                llm = OpenRouterExtractor(model=args.llm_model, api_key=None if not args.llm_dry_run else "dry-run")
+            else:
+                print("OPENROUTER_API_KEY not set: skipping the LLM pass (use --no-llm to hide this).")
+        stats = asyncio.run(run_pipeline(settings, source, *stages, llm=llm, llm_limit=args.llm_limit,
+                                         llm_budget=args.llm_budget, llm_dry_run=args.llm_dry_run))
         print(stats.to_markdown())

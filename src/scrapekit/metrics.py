@@ -28,6 +28,10 @@ class RunStats:
     llm_input_tokens: int = 0
     llm_output_tokens: int = 0
     llm_cost_usd: float = 0.0
+    llm_failed: int = 0
+    llm_facts_kept: int = 0
+    llm_facts_dropped: int = 0  # excerpt not found on the cited page
+    llm_model: str = ""
     docs_extracted: int = 0
     docs_extract_cached: int = 0  # same content as last time, skipped
     docs_extract_failed: int = 0
@@ -70,9 +74,11 @@ class RunStats:
             f"| Documents extracted / skipped as unchanged / failed | {self.docs_extracted} / {self.docs_extract_cached} / {self.docs_extract_failed} |",
             f"| Entities with current facts | {self.entities} |",
             f"| Records (facts) new / updated / unchanged / removed | {self.records_new} / {self.records_updated} / {self.records_unchanged} / {self.records_removed} |",
-            f"| Paid LLM calls (cache hits) | {self.llm_calls} ({self.llm_cached}) |",
+            f"| LLM model | {self.llm_model or 'not used'} |",
+            f"| Paid LLM calls / cache hits / failed | {self.llm_calls} / {self.llm_cached} / {self.llm_failed} |",
+            f"| LLM facts kept / dropped by excerpt check | {self.llm_facts_kept} / {self.llm_facts_dropped} |",
             f"| LLM tokens in / out | {self.llm_input_tokens:,} / {self.llm_output_tokens:,} |",
-            f"| Estimated LLM cost (USD) | ${d['llm_cost_usd']:.4f} |",
+            f"| LLM cost (USD, as reported by OpenRouter) | ${d['llm_cost_usd']:.4f} |",
             f"| Skipped links by reason | {d['skips']} |",
             "",
         ]

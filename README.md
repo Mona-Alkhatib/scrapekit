@@ -32,6 +32,15 @@ uv run scrapekit crawl createto              # only download
 uv run scrapekit extract createto            # only re-extract from saved copies, no network
 ```
 
+LLM pass on PDFs (needs `OPENROUTER_API_KEY` in `.env`, never committed):
+
+```bash
+uv run scrapekit extract createto --llm-dry-run      # how many PDFs and estimated cost, no calls
+uv run scrapekit extract createto --llm-limit 10     # try on 10 PDFs (about $0.02)
+uv run scrapekit run createto --llm-budget 1.50      # full run, hard spend cap per run (default $0.50)
+uv run scrapekit run createto --no-llm               # skip the LLM entirely
+```
+
 Each run prints a summary and writes:
 
 | Output | What it is |
