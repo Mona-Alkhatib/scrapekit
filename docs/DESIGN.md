@@ -75,12 +75,66 @@ A test (`test_a_new_source_needs_only_a_config`) proves this: it crawls a made-u
 | `metrics.py` | Counts everything in a run and writes `runs/<run_id>.md` and `.json`. |
 | `cli.py` | `uv run scrapekit crawl <source>` and `uv run scrapekit sources` |
 
-## 5. Data model
+## 5. Extraction: from saved copies to facts
+
+Extraction is a separate stage that only reads saved copies, never the website. So it can be re-run any time (for example after improving an extractor) with zero requests to the site.
+
+### What a "fact" is
+
+One field of one thing, plus where it came from:
+
+| entity_type | entity_key | field | value | source_url | locator |
+|---|---|---|---|---|---|
+| project | south-river | phase | "Leasing" | https://createto.ca/projects/south-river | `__NEXT_DATA__ page.content.phase` |
+| project | south-river | site_area | "18.5 acres" | same | `__NEXT_DATA__ page.content.siteArea` |
+| document | https://a-us.storyblok.com/.../agenda.pdf | page_count | 12 | same | pdf structure |
+
+Storing one row per field (instead of one wide row per project) makes history simple: each field can change on its own, and each one keeps its own source.
+
+### Extractors
+
+| Extractor | Used for | How |
+|---|---|---|
+| `storyblok` | createto.ca project and news pages | Reads the CMS record embedded in the page (`__NEXT_DATA__` JSON). Exact values, free, no AI. Named after the technology, so other Storyblok sites can reuse it. |
+| `generic` | Any HTML page, and static pages on createto.ca | Title, meta description, headings, main text. Works on any site. |
+| `pdf` | Every linked PDF | Text of each page (saved with 1-based page numbers for citing), page count, PDF metadata dates, first page excerpt. Scanned PDFs with no text are logged as `no_text_layer`. |
+
+A source picks its page extractor in its config (`page_extractor="storyblok"`). The fallback is `generic`.
+
+### Fields we keep and why
+
+| Entity | Fields | Why they are useful later |
+|---|---|---|
+| project | name, phase, timeline (phase + schedule), ward, councillor, address, major intersection, location (lat/lon), site area, current / proposed / surrounding use, types, initiatives, summary, body text, published and CMS updated dates | Answers "what is CreateTO doing, where, and at what stage", and lets you track phase changes over time |
+| news | title, published date, topics (e.g. board meetings), related projects, event dates, external link, body text | Board and committee meetings and announcements are where decisions show up first; dates let consumers filter to the last 5 years |
+| document | title (from file name and PDF metadata), page count, created / modified dates, first page excerpt, page text | Agendas, minutes and reports are the deepest source; page text enables cited facts in round 3 |
+| page | title, description, headings, text | Context pages (about, policies, strategic plan) |
+
+### History: corrections and amendments
+
+```mermaid
+flowchart LR
+    A[New facts from a document] --> B{Same field already current?}
+    B -- no --> N[Insert: new]
+    B -- yes, same value --> U[Mark confirmed in this run: unchanged]
+    B -- yes, different value --> C[Insert new row<br/>close old row: valid_to + superseded_by]
+    D[Current field missing now] --> R[Close it: removed]
+```
+
+Nothing is overwritten. For any field you can see every value it ever had, when we first saw it, when it stopped being true, and which snapshot it came from. Example: a project moving from "Leasing" to "Completed" leaves two rows, linked.
+
+### Re-runs stay cheap
+
+The `extractions` table remembers (url, content hash, extractor version). If a document's content did not change, its extraction is skipped. If an extractor is improved, its version number is bumped and everything is re-extracted once from the saved copies.
+
+## 6. Data model
 
 ```mermaid
 erDiagram
     runs ||--o{ snapshots : "created in"
     runs ||--o{ skips : "logged in"
+    snapshots ||--o{ facts : "read from"
+    snapshots ||--o| pdf_pages : "text of"
     documents ||--o{ snapshots : "has versions"
     documents ||--o{ links : "links to"
 
@@ -89,15 +143,20 @@ erDiagram
     snapshots { int id PK; text url; text content_hash; text fetched_at; text run_id; text path }
     skips { int id PK; text run_id; text url; text reason; text detail }
     links { text src; text dst }
+    facts { int id PK; text entity_type; text entity_key; text field; text value; text source_url; text content_hash; text locator; text valid_from; text valid_to; int superseded_by }
+    pdf_pages { text content_hash; int page_number; text text }
 ```
 
 - **documents**: one row per URL we know (page or file), tagged with its source, with the latest status, ETag and hash.
 - **snapshots**: one row per *distinct version* of a URL. Same content again does not add a row. A new row means the source changed, and the old version is still on disk. This is our history of the raw source.
 - **skips**: every link we did not use, with a reason: `off_domain`, `excluded_path`, `robots_disallowed`, `http_404`, `network_error`, `too_large`, `non_http_link`, `max_pages`.
 - **links**: which page linked to which URL, so every file can be traced back to the page that mentioned it.
+- **facts**: one row per field of one entity, with source, locator and validity dates (section 5).
+- **extractions**: which document versions were already extracted, and any failures.
+- **pdf_pages**: text of each PDF page, keyed by content hash and page number.
 - **runs**: one row per run with all the metrics.
 
-## 6. What happens on a repeat run
+## 7. What happens on a repeat run
 
 ```mermaid
 flowchart TD
@@ -113,7 +172,7 @@ flowchart TD
 
 "Unchanged" means no new snapshot, so the extraction step (and any paid AI call) is skipped for it.
 
-## 7. Being polite (not DDoS-ing the site)
+## 8. Being polite (not DDoS-ing the site)
 
 - At most 1 request per second **per host**, no matter how many workers run.
 - A clear `User-Agent` that says what we are.
@@ -121,7 +180,7 @@ flowchart TD
 - Retries back off (1s, 2s, 4s) and respect `Retry-After`.
 - Conditional GETs mean a repeat run downloads almost nothing.
 
-## 8. Decisions and trade-offs
+## 9. Decisions and trade-offs
 
 | Decision | Why | What we gave up |
 |---|---|---|
@@ -129,14 +188,16 @@ flowchart TD
 | Plain async Python (`httpx`) instead of Scrapy | Small, easy to read and explain, enough for ~250 pages | Scrapy's built-in middleware ecosystem |
 | No headless browser | Pages are server-rendered | Would need Playwright if the site moved to client-side rendering |
 | SQLite + files on disk | Zero setup, one file to hand over, easy to query | Not built for many writers at once (Postgres would be the next step) |
-| Hash raw bytes for change detection | Exact and simple | Next.js pages may change bytes on every deploy without real content changes. Round 2 adds a hash of the *extracted content* so cosmetic changes do not trigger re-extraction. |
+| One row per fact, not one wide row per project | Each field keeps its own source and history; works for any entity type and any site | Consumers need a pivot to get one row per project (the export in round 4 does this) |
+| Rules first, AI only for PDFs | Exact, free and testable where the data is structured | Free text inside pages is not mined for facts yet |
+| Hash raw bytes for change detection | Exact and simple | Next.js pages may change bytes on every deploy without real content changes. Fact-level comparison handles this: a cosmetic change re-runs the cheap parser, but no fact changes and no AI call is made. |
 
-## 9. Build rounds
+## 10. Build rounds
 
 | Round | Scope | Status |
 |---|---|---|
 | 1 | Polite crawler, sitemap + link walk, raw copies, skip log, run metrics, pluggable sources | Done |
-| 2 | Extract fields from HTML (Next.js JSON) and text + page numbers from PDFs | Next |
-| 3 | OpenRouter extraction for PDFs only, cached by hash, real cost tracking | |
+| 2 | Extract fields from HTML (Next.js JSON) and text + page numbers from PDFs, fact history | Done |
+| 3 | OpenRouter extraction for PDFs only, cached by hash, real cost tracking | Next |
 | 4 | Record history (corrections), replay mode for the 3 variants, JSONL export | |
 | 5 | Two real runs, results table, README polish | |

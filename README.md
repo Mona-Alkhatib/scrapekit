@@ -25,16 +25,18 @@ cp .env.example .env   # add OPENROUTER_API_KEY (only needed for PDF extraction)
 ## Run
 
 ```bash
-uv run scrapekit sources                       # list known sources
-uv run scrapekit crawl createto                # full crawl, about 1 request per second per host
-uv run scrapekit crawl createto --max-pages 20 # quick smoke test
+uv run scrapekit sources                     # list known sources
+uv run scrapekit run createto                # crawl + extract (the normal command)
+uv run scrapekit run createto --max-pages 20 # quick smoke test
+uv run scrapekit crawl createto              # only download
+uv run scrapekit extract createto            # only re-extract from saved copies, no network
 ```
 
 Each run prints a summary and writes:
 
 | Output | What it is |
 |---|---|
-| `data/scrapekit.db` | SQLite: documents, snapshots, skips, links, runs |
+| `data/scrapekit.db` | SQLite: documents, snapshots, facts (with history), pdf_pages, skips, links, runs |
 | `data/raw/` | Raw copies of pages and files, named by SHA-256 |
 | `runs/<run_id>.md` / `.json` | Metrics for that run |
 

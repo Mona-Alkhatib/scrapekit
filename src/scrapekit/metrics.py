@@ -28,9 +28,14 @@ class RunStats:
     llm_input_tokens: int = 0
     llm_output_tokens: int = 0
     llm_cost_usd: float = 0.0
-    records_new: int = 0
+    docs_extracted: int = 0
+    docs_extract_cached: int = 0  # same content as last time, skipped
+    docs_extract_failed: int = 0
+    entities: int = 0  # distinct projects, news items, pages and documents with current facts
+    records_new: int = 0  # a record is one fact: one field of one entity
     records_updated: int = 0
     records_unchanged: int = 0
+    records_removed: int = 0
 
     def finish(self) -> None:
         self.duration_seconds = round(time.monotonic() - self.started, 1)
@@ -62,7 +67,9 @@ class RunStats:
             f"| Pages fetched / unchanged / changed | {self.pages_fetched} / {self.pages_unchanged} / {self.pages_changed} |",
             f"| Files fetched / unchanged / changed | {self.files_fetched} / {self.files_unchanged} / {self.files_changed} |",
             f"| Bytes downloaded | {self.bytes_downloaded:,} |",
-            f"| Records new / updated / unchanged | {self.records_new} / {self.records_updated} / {self.records_unchanged} |",
+            f"| Documents extracted / skipped as unchanged / failed | {self.docs_extracted} / {self.docs_extract_cached} / {self.docs_extract_failed} |",
+            f"| Entities with current facts | {self.entities} |",
+            f"| Records (facts) new / updated / unchanged / removed | {self.records_new} / {self.records_updated} / {self.records_unchanged} / {self.records_removed} |",
             f"| Paid LLM calls (cache hits) | {self.llm_calls} ({self.llm_cached}) |",
             f"| LLM tokens in / out | {self.llm_input_tokens:,} / {self.llm_output_tokens:,} |",
             f"| Estimated LLM cost (USD) | ${d['llm_cost_usd']:.4f} |",

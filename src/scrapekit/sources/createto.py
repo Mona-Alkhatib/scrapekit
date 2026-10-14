@@ -6,6 +6,7 @@ CREATETO = Source(
     crawl_hosts=("createto.ca", "www.createto.ca"),
     sitemap_urls=("https://createto.ca/sitemap.xml",),
     excluded_path_prefixes=("/system/", "/search"),
+    page_extractor="storyblok",
     notes=(
         "Next.js + Storyblok CMS, server rendered. Pages embed __NEXT_DATA__ JSON with structured fields. "
         "Sends ETags. Sitemap lastmod is the build time, so not useful for change detection. "

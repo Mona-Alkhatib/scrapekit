@@ -1,0 +1,41 @@
+"""Extractors turn one saved page or file into facts.
+
+A fact is one field of one thing, with where it came from:
+    (entity_type="project", entity_key="south-river", field="phase", value="Leasing",
+     source_url=..., locator="__NEXT_DATA__ page.content.phase")
+
+Extractors are pure functions over saved bytes, so extraction can be re-run any time
+without touching the website.
+"""
+
+import json
+from dataclasses import dataclass
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class Fact:
+    entity_type: str  # project, news, page, document
+    entity_key: str  # stable id inside the source: a slug or the file URL
+    field: str
+    value: str | int | float | list | dict | None
+    locator: str  # where in the source: a JSON path, "page 3", "<title>"
+    excerpt: str | None = None  # short supporting text, mainly for PDFs
+    method: str = "parse"  # parse (rules, free) or llm (paid)
+
+    def value_json(self) -> str:
+        return json.dumps(self.value, ensure_ascii=False, sort_keys=True)
+
+
+class ExtractionError(Exception):
+    """Raised when a page or file cannot be parsed. Logged, never fatal."""
+
+
+PageExtractor = Callable[[str, bytes], list[Fact]]
+
+
+def get_page_extractor(name: str) -> PageExtractor:
+    from . import generic_html, storyblok
+
+    extractors = {"generic": generic_html.extract, "storyblok": storyblok.extract}
+    return extractors[name]

@@ -14,5 +14,6 @@ class Source:
     excluded_path_prefixes: tuple[str, ...] = ()  # public but useless pages on the crawl hosts
     file_extensions: tuple[str, ...] = DEFAULT_FILE_EXTENSIONS  # downloaded from any host
     max_pages: int = 2000
+    page_extractor: str = "generic"  # "generic" works anywhere; "storyblok" reads Next.js + Storyblok JSON
     notes: str = ""  # what we learned about the site, shown by `scrapekit sources`
     tags: tuple[str, ...] = ()

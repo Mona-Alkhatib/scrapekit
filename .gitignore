@@ -6,3 +6,4 @@ __pycache__/
 data/
 runs/
 docs/internal/
+.DS_Store

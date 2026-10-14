@@ -1,6 +1,7 @@
 """SQLite storage: what we fetched, every distinct version of it, and what we skipped."""
 
 import sqlite3
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,6 +57,47 @@ CREATE TABLE IF NOT EXISTS links (
     src TEXT NOT NULL,
     dst TEXT NOT NULL,
     PRIMARY KEY (src, dst)
+);
+-- One row per field of one entity, as observed. Never updated in place except to close it:
+-- a changed value inserts a new row and sets valid_to + superseded_by on the old one.
+CREATE TABLE IF NOT EXISTS facts (
+    id                 INTEGER PRIMARY KEY,
+    source             TEXT NOT NULL,
+    entity_type        TEXT NOT NULL,
+    entity_key         TEXT NOT NULL,
+    field              TEXT NOT NULL,
+    value              TEXT NOT NULL,          -- JSON
+    source_url         TEXT NOT NULL,
+    content_hash       TEXT NOT NULL,          -- the snapshot this was read from
+    locator            TEXT NOT NULL,          -- JSON path, "page 3", "<title>"
+    excerpt            TEXT,
+    method             TEXT NOT NULL,          -- parse or llm
+    run_id             TEXT NOT NULL,
+    valid_from         TEXT NOT NULL,
+    valid_to           TEXT,                   -- NULL means this is the current value
+    superseded_by      INTEGER,
+    last_confirmed_run TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS facts_by_url ON facts (source_url, valid_to);
+CREATE INDEX IF NOT EXISTS facts_by_entity ON facts (source, entity_type, entity_key);
+
+-- Which (url, content version, extractor) we already processed. This is what makes re-runs cheap.
+CREATE TABLE IF NOT EXISTS extractions (
+    url          TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    extractor    TEXT NOT NULL,
+    status       TEXT NOT NULL,                -- ok, failed, unsupported
+    detail       TEXT,
+    run_id       TEXT NOT NULL,
+    at           TEXT NOT NULL,
+    PRIMARY KEY (url, content_hash, extractor)
+);
+
+CREATE TABLE IF NOT EXISTS pdf_pages (
+    content_hash TEXT NOT NULL,
+    page_number  INTEGER NOT NULL,             -- 1-based, as a person would cite it
+    text         TEXT NOT NULL,
+    PRIMARY KEY (content_hash, page_number)
 );
 """
 
@@ -155,6 +197,88 @@ class Store:
 
     def add_link(self, src: str, dst: str) -> None:
         self.conn.execute("INSERT OR IGNORE INTO links (src, dst) VALUES (?, ?)", (src, dst))
+
+    # ---------- extraction ----------
+
+    def documents_to_extract(self, source: str) -> list[sqlite3.Row]:
+        """Documents seen in the latest crawl of this source that have a saved copy."""
+        return self.conn.execute(
+            """
+            SELECT d.url, d.kind, d.content_type, d.current_hash, s.path
+            FROM documents d JOIN snapshots s ON s.url = d.url AND s.content_hash = d.current_hash
+            WHERE d.source = ? AND d.last_status IN (200, 304)
+              AND d.last_seen_run = (SELECT MAX(last_seen_run) FROM documents WHERE source = ?)
+            ORDER BY d.url
+            """,
+            (source, source),
+        ).fetchall()
+
+    def already_extracted(self, url: str, content_hash: str, extractor: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM extractions WHERE url = ? AND content_hash = ? AND extractor = ?",
+            (url, content_hash, extractor),
+        ).fetchone()
+        return row is not None
+
+    def record_extraction(self, url: str, content_hash: str, extractor: str, status: str, detail: str | None = None) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO extractions VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (url, content_hash, extractor, status, detail, self.run_id, utcnow()),
+        )
+
+    def save_pdf_pages(self, content_hash: str, pages: list[str]) -> None:
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO pdf_pages VALUES (?, ?, ?)",
+            [(content_hash, i + 1, text) for i, text in enumerate(pages)],
+        )
+
+    def apply_facts(self, source: str, url: str, content_hash: str, facts: list) -> Counter:
+        """Compares new facts from one document with the current ones and records the difference.
+
+        new: field seen for the first time. updated: value changed, old row closed and linked.
+        unchanged: same value, only last_confirmed_run moves. removed: field no longer present.
+        """
+        now = utcnow()
+        counts: Counter = Counter()
+        current = {
+            (r["entity_type"], r["entity_key"], r["field"]): r
+            for r in self.conn.execute(
+                "SELECT id, entity_type, entity_key, field, value FROM facts WHERE source_url = ? AND valid_to IS NULL",
+                (url,),
+            )
+        }
+        seen = set()
+        for f in facts:
+            key = (f.entity_type, f.entity_key, f.field)
+            if key in seen:
+                continue
+            seen.add(key)
+            value = f.value_json()
+            old = current.get(key)
+            if old is not None and old["value"] == value:
+                self.conn.execute("UPDATE facts SET last_confirmed_run = ? WHERE id = ?", (self.run_id, old["id"]))
+                counts["unchanged"] += 1
+                continue
+            cur = self.conn.execute(
+                """
+                INSERT INTO facts (source, entity_type, entity_key, field, value, source_url, content_hash,
+                                   locator, excerpt, method, run_id, valid_from, last_confirmed_run)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (source, *key, value, url, content_hash, f.locator, f.excerpt, f.method, self.run_id, now, self.run_id),
+            )
+            if old is None:
+                counts["new"] += 1
+            else:
+                self.conn.execute(
+                    "UPDATE facts SET valid_to = ?, superseded_by = ? WHERE id = ?", (now, cur.lastrowid, old["id"])
+                )
+                counts["updated"] += 1
+        for key, old in current.items():
+            if key not in seen:
+                self.conn.execute("UPDATE facts SET valid_to = ? WHERE id = ?", (now, old["id"]))
+                counts["removed"] += 1
+        return counts
 
     def commit(self) -> None:
         self.conn.commit()
