@@ -14,6 +14,7 @@ class Settings:
     max_file_bytes: int = 50 * 1024 * 1024
     timeout_seconds: float = 30.0
     max_retries: int = 3
+    revalidate_all: bool = False  # re-check even files marked immutable by the source
 
     @property
     def db_path(self) -> Path:

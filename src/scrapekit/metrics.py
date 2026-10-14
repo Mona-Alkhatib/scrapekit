@@ -21,6 +21,7 @@ class RunStats:
     files_fetched: int = 0
     files_unchanged: int = 0
     files_changed: int = 0
+    files_not_rechecked: int = 0  # immutable URLs with a saved copy: no request at all
     bytes_downloaded: int = 0
     skips: Counter = field(default_factory=Counter)
     llm_calls: int = 0
@@ -70,6 +71,7 @@ class RunStats:
             f"| Status codes | {d['status_counts']} |",
             f"| Pages fetched / unchanged / changed | {self.pages_fetched} / {self.pages_unchanged} / {self.pages_changed} |",
             f"| Files fetched / unchanged / changed | {self.files_fetched} / {self.files_unchanged} / {self.files_changed} |",
+            f"| Files not re-checked (immutable URL, saved copy) | {self.files_not_rechecked} |",
             f"| Bytes downloaded | {self.bytes_downloaded:,} |",
             f"| Documents extracted / skipped as unchanged / failed | {self.docs_extracted} / {self.docs_extract_cached} / {self.docs_extract_failed} |",
             f"| Entities with current facts | {self.entities} |",

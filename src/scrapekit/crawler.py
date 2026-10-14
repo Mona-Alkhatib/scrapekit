@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -136,6 +137,12 @@ class Crawler:
         prev_path = self.store.latest_snapshot_path(job.url) if prev_hash else None
         have_copy = prev_path is not None and Path(prev_path).exists()
 
+        if have_copy and job.kind == "file" and self.is_immutable(job.url) and not self.settings.revalidate_all:
+            # A new version of this file would get a new URL, so the saved copy is still current.
+            self.count(job.kind, "unchanged")
+            self.stats.files_not_rechecked += 1
+            return
+
         result = await self.fetcher.fetch(
             job.url,
             etag=previous["etag"] if have_copy else None,
@@ -162,6 +169,9 @@ class Crawler:
 
         if job.kind == "page" and "html" in (content_type or ""):
             self.follow_links(job.url, body)
+
+    def is_immutable(self, url: str) -> bool:
+        return any(re.search(p, url) for p in self.source.immutable_url_patterns)
 
     def handle_failure(self, job: Job, result: FetchResult) -> bytes | None:
         """Logs the reason and returns None if the response is unusable, else the body."""

@@ -98,8 +98,20 @@ async def run_extract(
     count_entities(source, store, stats)
 
 
-def llm_facts(url: str, data: dict, kept: list[dict], page_count: int, truncated: bool) -> list[Fact]:
-    where = f"llm over pages 1-{page_count}" + (" (truncated)" if truncated else "")
+def _page_ranges(pages: list[int]) -> str:
+    ranges, start = [], None
+    for i, p in enumerate(pages):
+        if start is None:
+            start = p
+        if i + 1 == len(pages) or pages[i + 1] != p + 1:
+            ranges.append(f"{start}-{p}" if start != p else str(p))
+            start = None
+    return ", ".join(ranges)
+
+
+def llm_facts(url: str, data: dict, kept: list[dict], page_count: int, pages_sent: list[int] | None) -> list[Fact]:
+    sent = pages_sent or list(range(1, page_count + 1))
+    where = f"llm over pages {_page_ranges(sent)} of {page_count}"
     facts = [
         Fact("document", url, f"llm_{name}", data.get(name), where, method="llm")
         for name in ("doc_type", "title", "document_date", "organization", "summary")
@@ -175,7 +187,7 @@ async def run_llm(
             stats.llm_input_tokens += result.input_tokens
             stats.llm_output_tokens += result.output_tokens
             stats.llm_cost_usd += result.cost_usd
-            data = dict(result.data, _truncated=result.truncated)
+            data = dict(result.data, _truncated=result.truncated, _pages_sent=result.pages_sent)
             store.llm_cache_put(content_hash, llm.cache_key_suffix, json.dumps(data),
                                 result.input_tokens, result.output_tokens, result.cost_usd)
         else:
@@ -185,7 +197,7 @@ async def run_llm(
         kept, dropped = verify_facts(data.get("facts") or [], pages)
         stats.llm_facts_kept += len(kept)
         stats.llm_facts_dropped += len(dropped)
-        facts = llm_facts(url, data, kept, len(pages), bool(data.get("_truncated")))
+        facts = llm_facts(url, data, kept, len(pages), data.get("_pages_sent"))
         counts = store.apply_facts(source.name, url, content_hash, facts, method="llm")
         stats.records_new += counts["new"]
         stats.records_updated += counts["updated"]

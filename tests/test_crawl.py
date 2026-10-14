@@ -123,3 +123,22 @@ def test_alias_hosts_collapse_to_one_address():
 
     assert canonicalize("http://www.createto.ca/projects/a", CREATETO) == "https://createto.ca/projects/a"
     assert canonicalize("https://www.toronto.ca/x.pdf", CREATETO) == "https://www.toronto.ca/x.pdf"
+
+
+@respx.mock
+async def test_immutable_files_are_not_rechecked(settings):
+    pdf_url = "https://a-us.storyblok.com/f/1017201/x/e26c0e2362/notice.pdf"
+    respx.get("https://createto.ca/robots.txt").respond(404)
+    respx.get("https://a-us.storyblok.com/robots.txt").respond(404)
+    respx.get("https://createto.ca/sitemap.xml").respond(404)
+    respx.get("https://createto.ca/").respond(200, content=f'<a href="{pdf_url}">n</a>'.encode(),
+                                               headers={"content-type": "text/html"})
+    pdf_route = respx.get(pdf_url).respond(200, content=b"%PDF-1.4 x")
+
+    await crawl(settings, CREATETO)
+    stats = await crawl(settings, CREATETO)
+    assert pdf_route.call_count == 1  # second run made no request for it
+    assert stats.files_not_rechecked == 1
+
+    stats = await crawl(replace(settings, revalidate_all=True), CREATETO)
+    assert pdf_route.call_count == 2

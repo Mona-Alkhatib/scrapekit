@@ -37,6 +37,7 @@ class FakeLLM:
                 ],
             },
             model=self.model, input_tokens=1000, output_tokens=100, cost_usd=0.0004, truncated=False,
+            pages_sent=list(range(1, len(pages) + 1)),
         )
 
     async def close(self):
@@ -73,10 +74,17 @@ def test_excerpt_may_skip_a_page_footer_but_not_invent_text():
 
 
 def test_page_tags_and_truncation():
-    text, truncated = build_document_text(["one", "two"])
-    assert text.startswith("[page 1]\none") and "[page 2]" in text and not truncated
-    _, truncated = build_document_text(["x" * 50_000])
-    assert truncated
+    text, truncated, sent = build_document_text(["one", "two"])
+    assert text.startswith("[page 1]\none") and "[page 2]" in text and not truncated and sent == [1, 2]
+    _, truncated, sent = build_document_text(["x" * 50_000])
+    assert truncated and sent == [1]
+
+
+def test_long_documents_keep_start_and_end():
+    pages = [f"page {i} " + "x" * 3000 for i in range(1, 31)] + ["AMENDMENT: meeting moved to December 15"]
+    text, truncated, sent = build_document_text(pages)
+    assert truncated and sent[0] == 1 and sent[-1] == 31
+    assert "AMENDMENT" in text and "omitted]" in text
 
 
 @respx.mock

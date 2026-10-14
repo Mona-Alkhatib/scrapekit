@@ -47,6 +47,8 @@ def is_file_url(url: str, source: Source) -> bool:
 
 def classify(url: str, source: Source) -> tuple[str | None, str | None]:
     """Returns (kind, None) to fetch it, or (None, reason) to skip it."""
+    if source.url_allowlist is not None and url not in source.url_allowlist:
+        return None, "not_in_allowlist"
     if is_file_url(url, source):
         return "file", None  # files may live on any host
     parts = urlparse(url)

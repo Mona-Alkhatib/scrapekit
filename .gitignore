@@ -7,3 +7,5 @@ data/
 runs/
 docs/internal/
 .DS_Store
+export/
+examples/variants/.work/

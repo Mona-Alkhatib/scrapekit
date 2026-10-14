@@ -1,0 +1,62 @@
+{
+  "https://createto.ca/robots.txt": {
+    "file": "../files/robots.txt",
+    "content_type": "text/plain"
+  },
+  "https://createto.ca/sitemap.xml": {
+    "file": "../files/sitemap.xml",
+    "content_type": "application/xml"
+  },
+  "https://createto.ca": {
+    "file": "../files/createto.ca",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://createto.ca/news/build-toronto-corporate-documents-archive": {
+    "file": "../files/createto.ca_news_build-toronto-corporate-documents-archive",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://createto.ca/news/c8196299-a581-43a2-80ce-e1da657c8b89": {
+    "file": "../files/createto.ca_news_c8196299-a581-43a2-80ce-e1da657c8b89",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://createto.ca/news/corporate-board-meeting-april-12-2022": {
+    "file": "../files/createto.ca_news_corporate-board-meeting-april-12-2022",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://createto.ca/projects/105-spadina-avenue": {
+    "file": "../files/createto.ca_projects_105-spadina-avenue",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://createto.ca/projects/1113-1117-dundas-street-west": {
+    "file": "../files/createto.ca_projects_1113-1117-dundas-street-west",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://createto.ca/projects/150-queens-wharf-road": {
+    "file": "../files/createto.ca_projects_150-queens-wharf-road",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://createto.ca/projects/158-borough-drive": {
+    "file": "../files/createto.ca_projects_158-borough-drive",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://a-us.storyblok.com/f/1017201/x/00b9663133/backgroundfile-109169.pdf": {
+    "file": "../files/a-us.storyblok.com_f_1017201_x_00b9663133_backgroundfile-109169.pdf",
+    "content_type": "application/pdf"
+  },
+  "https://a-us.storyblok.com/f/1017201/x/27e35be783/corporate-bod-agenda-220412-final-1.pdf": {
+    "file": "../files/a-us.storyblok.com_f_1017201_x_27e35be783_corporate-bod-agenda-220412-final-1.pdf",
+    "content_type": "application/pdf"
+  },
+  "https://a-us.storyblok.com/f/1017201/x/516a7e134f/meeting-2021-meeting-summary-community-meeting-2.pdf": {
+    "file": "../files/a-us.storyblok.com_f_1017201_x_516a7e134f_meeting-2021-meeting-summary-community-meeting-2.pdf",
+    "content_type": "application/pdf"
+  },
+  "https://a-us.storyblok.com/f/1017201/x/6c23aa304c/meeting-2021-information-sheet-150-queens-wharf-road.pdf": {
+    "file": "../files/a-us.storyblok.com_f_1017201_x_6c23aa304c_meeting-2021-information-sheet-150-queens-wharf-road.pdf",
+    "content_type": "application/pdf"
+  },
+  "https://a-us.storyblok.com/f/1017201/x/bbc97cd0bb/corporate-board-notice-of-meeting-january-26-2026-v2.pdf": {
+    "file": "../files/a-us.storyblok.com_f_1017201_x_bbc97cd0bb_corporate-board-notice-of-meeting-january-26-2026-v2.pdf",
+    "content_type": "application/pdf"
+  }
+}

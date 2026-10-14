@@ -29,6 +29,7 @@ uv run scrapekit sources                     # list known sources
 uv run scrapekit run createto                # crawl + extract (the normal command)
 uv run scrapekit run createto --max-pages 20 # quick smoke test
 uv run scrapekit crawl createto              # only download
+uv run scrapekit run createto --revalidate-all  # also re-check files with immutable URLs (do this periodically)
 uv run scrapekit extract createto            # only re-extract from saved copies, no network
 ```
 
@@ -48,6 +49,24 @@ Each run prints a summary and writes:
 | `data/scrapekit.db` | SQLite: documents, snapshots, facts (with history), pdf_pages, skips, links, runs |
 | `data/raw/` | Raw copies of pages and files, named by SHA-256 |
 | `runs/<run_id>.md` / `.json` | Metrics for that run |
+
+## Export for other services
+
+```bash
+uv run scrapekit export createto     # writes export/createto/*.jsonl and SCHEMA.md
+```
+
+`entities.jsonl` has one line per project, news item, document or page with current values and where each came from. `facts.jsonl` has the full history. See `export/createto/SCHEMA.md`.
+
+## Variant runs (unchanged, changed source, failed file)
+
+```bash
+uv run scrapekit variants createto --reuse-fixtures            # from the committed fixtures, no crawl needed
+uv run scrapekit variants createto --reuse-fixtures --no-llm   # same, no LLM cost
+uv run scrapekit variants createto                             # rebuild fixtures from your own crawl
+```
+
+Results: [examples/variants/REPORT.md](examples/variants/REPORT.md).
 
 ## Adding a website
 

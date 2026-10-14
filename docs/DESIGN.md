@@ -94,7 +94,10 @@ A test (`test_a_new_source_needs_only_a_config`) proves this: it crawls a made-u
 | `extract/` | Rule-based extractors: `storyblok`, `generic_html`, `pdf`. |
 | `extract_stage.py` | Runs pass 1 (rules) and pass 2 (LLM) over saved copies. |
 | `llm.py` | OpenRouter client, prompt, JSON schema, excerpt check. |
-| `cli.py` | `scrapekit run / crawl / extract <source>` and `scrapekit sources` |
+| `export.py` | JSON Lines export for other services. |
+| `replay.py` | Serves saved copies as if they were the website. |
+| `variants.py` | Builds fixtures and runs the first / unchanged / changed / failed scenarios. |
+| `cli.py` | `scrapekit run / crawl / extract / export / variants <source>` and `scrapekit sources` |
 
 ## 6. Extraction: from saved copies to facts
 
@@ -177,7 +180,7 @@ flowchart LR
 | Made-up facts | Every fact must quote the page. We check the quote is really there, ignoring case, spacing and punctuation. If not, the fact is dropped and counted in the run report. The check allows three real-world PDF quirks we found in testing: a sentence that runs over a page break, numbers split by the PDF text layer (`50 0,000`), and a page footer sitting inside the quoted sentence (the quote may be split once into two verbatim parts of 4+ words, at most 300 characters apart). A quote stitched together with "..." is still rejected. |
 | Wrong page numbers | Same check: the quote must be on the cited page, and the page must exist. |
 | Paying twice | Answers are cached by content hash + model + prompt version. An unchanged PDF is never sent again, even if it appears under a second URL. Changing the model or prompt re-runs only what is needed. Improving the excerpt check has its own version number and re-checks cached answers for free. `--llm-limit` counts only paid calls. |
-| Huge documents | Text is capped at 40,000 characters (about 10,000 tokens). Facts from a cut document are marked `(truncated)` in their locator. |
+| Huge documents | Text is capped at 40,000 characters (about 10,000 tokens). Long documents send their start (about 70%) and their end (about 30%) with `[pages X-Y omitted]` in between, because amendments, signatures and final decisions often sit at the end. We found this in the variant test: an amendment added as the last page was invisible when only the start was sent. The locator records exactly which pages the model saw, for example `llm over pages 1-15, 20-22 of 22`. |
 | Slow runs | Up to 8 calls at once. |
 | API errors or bad JSON | Retries (3), then the document is logged as `llm_error` and the run continues. Rule-based facts for it are still saved. |
 | Real cost | OpenRouter returns the actual cost of every call. We add it up per run. |
@@ -189,6 +192,42 @@ Run without the LLM: `uv run scrapekit run createto --no-llm`. Try it on a few f
 Dry-run estimate on the real crawl (466 PDFs with text): about 1.49M input tokens, estimated $0.93 for the whole first run with the default model.
 
 Trial on 10 real PDFs: $0.0152 actual (estimate $0.02), 4.9 seconds, 0 failures. Doc types, dates, organizations, addresses and project names were correct on manual review.
+
+## 6b. Export for other services
+
+`uv run scrapekit export createto` writes JSON Lines files to `export/createto/`, so another service can load the data without SQLite:
+
+| File | One line per | Use it for |
+|---|---|---|
+| `entities.jsonl` | project, news item, document or page, with current values only | Loading the latest state. Every field carries its value, locator, excerpt, method and the snapshot hash it came from. Pages list their linked documents; documents list the pages that link to them. |
+| `facts.jsonl` | every value ever recorded, including superseded ones | History, audits, "what did the site say on date X" |
+| `documents.jsonl` | URL | Crawl status, hashes, where each URL was found |
+| `skips.jsonl` | skipped or failed link | Monitoring and coverage checks |
+| `runs.jsonl` | run | Metrics over time |
+| `SCHEMA.md` | | Field-by-field description |
+
+## 6c. Replay mode and the three variants
+
+The brief asks to show an unchanged run, a changed source and a failed file. Waiting for the live site to change is not repeatable, so scrapekit can **replay saved local copies** through the normal crawler.
+
+```mermaid
+flowchart LR
+    F[fixtures/base, changed, failed<br/>manifest.json + files] --> T[ReplayTransport<br/>same ETag and 304 rules as a server]
+    T --> FE[Normal Fetcher] --> C[Normal crawler + extractors]
+```
+
+- `ReplayTransport` plugs into the same HTTP client, so the code under test is exactly the code that runs live. It serves ETags and answers `304 Not Modified`, like a real server.
+- A replay run limits the source to the fixture URLs with `url_allowlist` (other links are logged as `not_in_allowlist`). The same allowlist is the natural hook for backfilling a chosen list of pages.
+- `uv run scrapekit variants createto` takes a small real slice of the crawl (homepage, project and news pages, and their smallest PDFs), builds three fixture sets, and runs four scenarios into a fresh database:
+
+| Run | Fixture | What it shows |
+|---|---|---|
+| 1. first run | base | Everything new, LLM pays for each PDF |
+| 2. unchanged repeat | base | All 304, nothing re-extracted, 0 paid calls |
+| 3. changed source | changed | A project's phase edited, a PDF amended with an extra page: only those two are re-processed, old values kept as history, 1 paid call |
+| 4. failed file | failed | One PDF corrupt, one returns 404: both logged, the run continues |
+
+The result is written to `examples/variants/REPORT.md`. Reviewers can re-run it from the committed fixtures with no crawl: `uv run scrapekit variants createto --reuse-fixtures` (add `--no-llm` to skip the few cents of LLM cost).
 
 ## 7. Data model
 
@@ -256,6 +295,7 @@ flowchart TD
 | One row per fact, not one wide row per project | Each field keeps its own source and history; works for any entity type and any site | Consumers need a pivot to get one row per project (the export in round 4 does this) |
 | Rules first, AI only for PDFs | Exact, free and testable where the data is structured | Free text inside pages is not mined for facts yet |
 | Hash raw bytes for change detection | Exact and simple | Next.js pages may change bytes on every deploy without real content changes. Fact-level comparison handles this: a cosmetic change re-runs the cheap parser, but no fact changes and no AI call is made. |
+| Do not re-check files with immutable URLs (Storyblok gives every upload a new URL) | Repeat runs skip about 470 requests, so they are several times faster and lighter on the hosts | A file deleted or corrupted in place would not be noticed until a full re-check. Mitigation: schedule `--revalidate-all` periodically (for example weekly). The variant demo uses it so file failures are visible. |
 
 ## 11. Build rounds
 
@@ -263,6 +303,6 @@ flowchart TD
 |---|---|---|
 | 1 | Polite crawler, sitemap + link walk, raw copies, skip log, run metrics, pluggable sources | Done |
 | 2 | Extract fields from HTML (Next.js JSON) and text + page numbers from PDFs, fact history | Done |
-| 3 | OpenRouter extraction for PDFs only, cached by hash, real cost tracking | In progress |
-| 4 | Record history (corrections), replay mode for the 3 variants, JSONL export | |
-| 5 | Two real runs, results table, README polish | |
+| 3 | OpenRouter extraction for PDFs only, cached by hash, real cost tracking, budget cap | Done |
+| 4 | Replay mode and the 3 variants, JSONL export, faster repeat runs (immutable file URLs) | Done |
+| 5 | Two real runs, results table, README polish | Next |

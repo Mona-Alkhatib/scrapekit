@@ -127,3 +127,25 @@ async def test_corrupt_pdf_is_logged_not_fatal(settings):
     assert stats.docs_extract_failed == 1
     assert stats.skips["parse_error"] == 1
     assert stats.docs_extracted == 2  # the two pages still worked
+
+
+@respx.mock
+async def test_export_has_current_entities_and_full_history(settings, tmp_path):
+    from scrapekit.db import Store
+    from scrapekit.export import export_source
+
+    mock_small_site(respx.mock, phase="leasing")
+    await run_pipeline(settings, CREATETO)
+    respx.mock.reset()
+    mock_small_site(respx.mock, phase="completed")
+    await run_pipeline(settings, CREATETO)
+
+    counts = export_source(Store(connect(settings.db_path), "export"), "createto", tmp_path / "export")
+    lines = [json.loads(l) for l in (tmp_path / "export/createto/entities.jsonl").read_text().splitlines()]
+    project = next(e for e in lines if e["entity_type"] == "project")
+    assert project["fields"]["phase"]["value"] == "Completed"
+    assert project["fields"]["phase"]["locator"] == "__NEXT_DATA__ page.content.phase"
+
+    facts = [json.loads(l) for l in (tmp_path / "export/createto/facts.jsonl").read_text().splitlines()]
+    phases = [f["value"] for f in facts if f["field"] == "phase"]
+    assert phases == ["Leasing", "Completed"] and counts["runs"] == 2

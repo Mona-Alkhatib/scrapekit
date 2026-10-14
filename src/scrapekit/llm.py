@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from openai import AsyncOpenAI
 
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2  # 2: long documents send start + end instead of start only
 DEFAULT_MODEL = "google/gemini-3.1-flash-lite"
 MAX_INPUT_CHARS = 40_000  # about 10k tokens; long reports are cut and marked truncated
 DEFAULT_RUN_BUDGET_USD = 0.50  # hard stop per run; protects the shared API credit
@@ -96,17 +96,45 @@ class LlmResult:
     output_tokens: int
     cost_usd: float
     truncated: bool
+    pages_sent: list[int]
 
 
-def build_document_text(pages: list[str]) -> tuple[str, bool]:
-    parts, size = [], 0
-    for number, text in enumerate(pages, start=1):
-        chunk = f"[page {number}]\n{' '.join(text.split())}\n"
-        if size + len(chunk) > MAX_INPUT_CHARS:
-            return "".join(parts), True
-        parts.append(chunk)
+def _page_chunk(number: int, text: str) -> str:
+    return f"[page {number}]\n{' '.join(text.split())}\n"
+
+
+def build_document_text(pages: list[str]) -> tuple[str, bool, list[int]]:
+    """Page-tagged text for the model. Returns (text, truncated, page numbers sent).
+
+    Long documents keep their start (about 70% of the budget) and their end (about 30%),
+    because amendments, signatures and final decisions often sit at the end.
+    """
+    chunks = [_page_chunk(n, t) for n, t in enumerate(pages, start=1)]
+    if sum(map(len, chunks)) <= MAX_INPUT_CHARS:
+        return "".join(chunks), False, list(range(1, len(pages) + 1))
+
+    head, size = [], 0
+    for i, chunk in enumerate(chunks):
+        if size + len(chunk) > MAX_INPUT_CHARS * 0.7:
+            break
+        head.append(i)
         size += len(chunk)
-    return "".join(parts), False
+    tail = []
+    for i in range(len(chunks) - 1, (head[-1] if head else -1), -1):
+        if size + len(chunks[i]) > MAX_INPUT_CHARS:
+            break
+        tail.insert(0, i)
+        size += len(chunks[i])
+    if not head and not tail:  # a single huge page: send its beginning
+        return chunks[0][:MAX_INPUT_CHARS], True, [1]
+
+    parts = [chunks[i] for i in head]
+    first_omitted = (head[-1] + 2) if head else 1
+    last_omitted = (tail[0]) if tail else len(chunks)
+    if first_omitted <= last_omitted:
+        parts.append(f"[pages {first_omitted}-{last_omitted} omitted]\n")
+    parts += [chunks[i] for i in tail]
+    return "".join(parts), True, [i + 1 for i in head + tail]
 
 
 VERIFY_VERSION = 4  # bump when the excerpt check changes; re-checks reuse cached answers for free
@@ -175,7 +203,7 @@ class OpenRouterExtractor:
         return f"{self.model}|v{PROMPT_VERSION}"
 
     async def extract(self, url: str, pages: list[str]) -> LlmResult:
-        text, truncated = build_document_text(pages)
+        text, truncated, pages_sent = build_document_text(pages)
         resp = await self.client.chat.completions.create(
             model=self.model,
             temperature=0,
@@ -200,6 +228,7 @@ class OpenRouterExtractor:
             output_tokens=usage.completion_tokens if usage else 0,
             cost_usd=cost,
             truncated=truncated,
+            pages_sent=pages_sent,
         )
 
     async def close(self) -> None:

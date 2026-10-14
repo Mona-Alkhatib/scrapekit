@@ -1,0 +1,27 @@
+{
+  "pages": [
+    "https://createto.ca",
+    "https://createto.ca/news/build-toronto-corporate-documents-archive",
+    "https://createto.ca/news/c8196299-a581-43a2-80ce-e1da657c8b89",
+    "https://createto.ca/news/corporate-board-meeting-april-12-2022",
+    "https://createto.ca/projects/105-spadina-avenue",
+    "https://createto.ca/projects/1113-1117-dundas-street-west",
+    "https://createto.ca/projects/150-queens-wharf-road",
+    "https://createto.ca/projects/158-borough-drive"
+  ],
+  "files": [
+    "https://a-us.storyblok.com/f/1017201/x/00b9663133/backgroundfile-109169.pdf",
+    "https://a-us.storyblok.com/f/1017201/x/27e35be783/corporate-bod-agenda-220412-final-1.pdf",
+    "https://a-us.storyblok.com/f/1017201/x/516a7e134f/meeting-2021-meeting-summary-community-meeting-2.pdf",
+    "https://a-us.storyblok.com/f/1017201/x/6c23aa304c/meeting-2021-information-sheet-150-queens-wharf-road.pdf",
+    "https://a-us.storyblok.com/f/1017201/x/bbc97cd0bb/corporate-board-notice-of-meeting-january-26-2026-v2.pdf"
+  ],
+  "changed_project": "https://createto.ca/projects/105-spadina-avenue",
+  "phase_change": [
+    "preDevelopment",
+    "completed"
+  ],
+  "amended_pdf": "https://a-us.storyblok.com/f/1017201/x/00b9663133/backgroundfile-109169.pdf",
+  "corrupt_pdf": "https://a-us.storyblok.com/f/1017201/x/27e35be783/corporate-bod-agenda-220412-final-1.pdf",
+  "gone_pdf": "https://a-us.storyblok.com/f/1017201/x/516a7e134f/meeting-2021-meeting-summary-community-meeting-2.pdf"
+}
