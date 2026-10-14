@@ -1,0 +1,57 @@
+# scrapekit
+
+A small, polite crawler that turns public websites and the files they link to into versioned, sourced data.
+
+The first source is [CreateTO](https://createto.ca). Each website is described by one small `Source` config, so adding another site does not change the crawler.
+
+- Crawls every public page on a site (sitemap + link walk).
+- Downloads every linked file (PDF, Word, Excel), including files hosted on other sites.
+- Saves a raw copy of every page and file, with one snapshot per version, so changes over time are kept.
+- Logs every skipped or failed link with a reason.
+- Writes a metrics report for every run (time, requests, files, records, paid calls, cost).
+- Repeat runs use conditional requests, so unchanged pages are not downloaded or processed again.
+
+How it works: see [docs/DESIGN.md](docs/DESIGN.md).
+
+## Setup
+
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync
+cp .env.example .env   # add OPENROUTER_API_KEY (only needed for PDF extraction)
+```
+
+## Run
+
+```bash
+uv run scrapekit sources                       # list known sources
+uv run scrapekit crawl createto                # full crawl, about 1 request per second per host
+uv run scrapekit crawl createto --max-pages 20 # quick smoke test
+```
+
+Each run prints a summary and writes:
+
+| Output | What it is |
+|---|---|
+| `data/scrapekit.db` | SQLite: documents, snapshots, skips, links, runs |
+| `data/raw/` | Raw copies of pages and files, named by SHA-256 |
+| `runs/<run_id>.md` / `.json` | Metrics for that run |
+
+## Adding a website
+
+1. Create `src/scrapekit/sources/<name>.py` with a `Source` (start URLs, hosts to crawl, sitemap, paths to skip).
+2. Add it to `src/scrapekit/sources/__init__.py`.
+3. `uv run scrapekit crawl <name>`
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+Tests run against a fake site, with no network access.
+
+## Status
+
+Built in rounds. See the table at the end of [docs/DESIGN.md](docs/DESIGN.md).
