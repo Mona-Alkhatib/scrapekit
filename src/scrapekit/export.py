@@ -10,6 +10,7 @@
 
 import json
 from collections import defaultdict
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from .db import Store
@@ -30,6 +31,9 @@ One line per entity with its current values.
 | `fields` | Object: field name -> `{value, locator, excerpt, method, valid_from, content_hash}` |
 | `linked_documents` | File URLs linked from this entity's page |
 | `linked_from` | For documents: pages that link to this file |
+| `best_date` | Most reliable date available (YYYY-MM-DD): publish date, else the date stated in the document, else PDF metadata |
+| `best_date_field` | Which field `best_date` came from |
+| `within_last_5_years` | `true` / `false` relative to the export day, `null` if no date is known |
 
 `locator` says where the value was found: a JSON path in the page, `page N` in a PDF, or `pages N, M` for LLM facts.
 `method` is `parse` (rules, exact) or `llm` (model output whose excerpt was verified on the cited page).
@@ -48,6 +52,29 @@ no_text_layer, llm_error, ...), `detail`, `run_id`.
 ## runs.jsonl
 One line per run with all metrics: duration, requests, status codes, files, records, LLM calls and cost.
 """
+
+
+# Most reliable date first: what the publisher states, then what the document says, then file metadata.
+DATE_FIELDS = ("first_published_at", "llm_document_date", "pdf_created", "cms_updated_at", "pdf_modified")
+WINDOW_YEARS = 5
+
+
+def best_date(fields: dict) -> tuple[str | None, str | None]:
+    for name in DATE_FIELDS:
+        value = (fields.get(name) or {}).get("value")
+        if isinstance(value, str) and len(value) >= 10 and value[:4].isdigit():
+            return value[:10], name
+    return None, None
+
+
+def within_window(day: str | None, today: date) -> bool | None:
+    if day is None:
+        return None
+    try:
+        d = date.fromisoformat(day)
+    except ValueError:
+        return None
+    return d >= today.replace(year=today.year - WINDOW_YEARS)
 
 
 def _write(path: Path, rows) -> int:
@@ -85,7 +112,10 @@ def export_source(store: Store, source: str, out_dir: Path) -> dict[str, int]:
             "value": json.loads(r["value"]), "locator": r["locator"], "excerpt": r["excerpt"],
             "method": r["method"], "valid_from": r["valid_from"], "content_hash": r["content_hash"],
         }
+    today = datetime.now(timezone.utc).date()
     for ent in entities.values():
+        ent["best_date"], ent["best_date_field"] = best_date(ent["fields"])
+        ent[f"within_last_{WINDOW_YEARS}_years"] = within_window(ent["best_date"], today)
         if ent["entity_type"] == "document":
             ent["linked_from"] = sorted(links_in.get(ent["source_url"], []))
         else:

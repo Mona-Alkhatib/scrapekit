@@ -3,9 +3,9 @@ __pycache__/
 *.pyc
 .env
 .pytest_cache/
-data/
-runs/
+/data/
+/runs/
 docs/internal/
 .DS_Store
-export/
+/export/
 examples/variants/.work/

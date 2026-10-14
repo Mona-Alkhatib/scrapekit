@@ -305,4 +305,4 @@ flowchart TD
 | 2 | Extract fields from HTML (Next.js JSON) and text + page numbers from PDFs, fact history | Done |
 | 3 | OpenRouter extraction for PDFs only, cached by hash, real cost tracking, budget cap | Done |
 | 4 | Replay mode and the 3 variants, JSONL export, faster repeat runs (immutable file URLs) | Done |
-| 5 | Two real runs, results table, README polish | Next |
+| 5 | Two real runs, results table, labeled costs, example output, 5 year flag in export | Done |
