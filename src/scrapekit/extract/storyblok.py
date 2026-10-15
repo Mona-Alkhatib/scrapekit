@@ -1,39 +1,49 @@
-"""Extractor for Next.js sites backed by the Storyblok CMS (createto.ca is one).
+"""Extractor for Next.js sites backed by the Storyblok CMS.
 
 These pages embed the full CMS record as JSON in <script id="__NEXT_DATA__">, so fields
-like phase, ward and dates can be read exactly, with no guessing and no AI. Named after
-the technology, not the site, so any other Storyblok site can reuse it.
+can be read exactly, with no guessing and no AI.
+
+This module knows how Storyblok pages are shaped, but nothing about any one site. Each site
+describes its own content model (which CMS components become which entities, and which CMS
+fields map to which of our fields) in a `StoryblokModel`, set on its Source in `sources/`.
 """
 
 import json
 import re
+from dataclasses import dataclass, field
 
 from . import ExtractionError, Fact, generic_html
 
 NEXT_DATA_RE = re.compile(rb'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
 
-PROJECT_FIELDS = {
-    # Storyblok field -> our field name
-    "title": "name",
-    "summary": "summary",
-    "address": "address",
-    "ward": "ward",
-    "councillorName": "councillor",
-    "majorIntersection": "major_intersection",
-    "siteArea": "site_area",
-    "currentUse": "current_use",
-    "proposedUse": "proposed_use",
-    "surroundingUse": "surrounding_use",
-    "delivery": "delivery",
-}
 
-NEWS_FIELDS = {
-    "title": "title",
-    "eventStartsAt": "event_starts_at",
-    "eventEndsAt": "event_ends_at",
-    "externalUrl": "external_url",
-    "externalSource": "external_source",
-}
+@dataclass(frozen=True)
+class ObjectList:
+    """A CMS list of objects kept as a list of small dicts, e.g. a project timeline."""
+
+    field: str  # our field name
+    keep: tuple[str, ...]  # keys kept from each object, in order
+    labels: dict[str, str] = field(default_factory=dict)  # key -> page lookup table that turns codes into labels
+
+
+@dataclass(frozen=True)
+class Component:
+    """How one Storyblok component (content type) becomes one of our entities."""
+
+    entity_type: str  # e.g. "project"
+    fields: dict[str, str] = field(default_factory=dict)  # CMS field -> our field, plain text values
+    name_fallback: tuple[str, str] | None = None  # (CMS field, our field): if blank, use the story name
+    labels: dict[str, tuple[str, str]] = field(default_factory=dict)  # CMS field -> (lookup table, our field)
+    location: tuple[str, str] | None = None  # (latitude field, longitude field) -> our "location"
+    object_lists: dict[str, ObjectList] = field(default_factory=dict)  # CMS field -> ObjectList
+    name_lists: dict[str, str] = field(default_factory=dict)  # CMS list of linked stories -> our field (their names)
+    ref_lists: dict[str, str] = field(default_factory=dict)  # CMS list of linked stories -> our field (slug, else name)
+    body_field: str = "body"  # rich text kept as body_text
+
+
+@dataclass(frozen=True)
+class StoryblokModel:
+    components: dict[str, Component]  # Storyblok component name -> how to read it
 
 
 def richtext(node) -> str:
@@ -71,90 +81,77 @@ def _blank(value) -> bool:
     return value in (None, "", [], {})
 
 
-def extract(url: str, html: bytes) -> list[Fact]:
+def extract(url: str, html: bytes, model: StoryblokModel | None = None) -> list[Fact]:
     data = load_next_data(html)
-    if data is None:
+    if data is None or model is None:
         return generic_html.extract(url, html)
     props = data.get("props", {}).get("pageProps", {})
     page = props.get("page") or {}
     content = page.get("content") or {}
-    component = content.get("component")
-
-    if component == "project":
-        return project_facts(page, content, props)
-    if component == "article":
-        return news_facts(page, content)
-    return generic_html.extract(url, html)  # static pages: about, policies, listings
+    component = model.components.get(content.get("component"))
+    if component is None:
+        return generic_html.extract(url, html)  # pages the model does not describe: about, policies, listings
+    return component_facts(component, page, content, props)
 
 
-def common_facts(kind: str, key: str, page: dict, content: dict) -> list[Fact]:
-    facts = []
+def component_facts(c: Component, page: dict, content: dict, props: dict) -> list[Fact]:
+    kind = c.entity_type
+    key = page.get("slug") or page.get("full_slug", "")
+    facts = [Fact(kind, key, "url_slug", page.get("full_slug"), _loc("page.full_slug"))]
+
+    for src, dst in c.fields.items():
+        if not _blank(content.get(src)):
+            facts.append(Fact(kind, key, dst, _clean(content[src]), _loc(f"page.content.{src}")))
+
+    if c.name_fallback:
+        src, dst = c.name_fallback
+        if _blank(content.get(src)) and not _blank(page.get("name")):
+            # Older stories may keep the headline only in the CMS story name.
+            facts.append(Fact(kind, key, dst, _clean(page["name"]), _loc("page.name")))
+
+    for src, (table, dst) in c.labels.items():
+        value = content.get(src)
+        if value:
+            lookup = props.get(table) or {}
+            label = [lookup.get(v, v) for v in value] if isinstance(value, list) else lookup.get(value, value)
+            facts.append(Fact(kind, key, dst, label, _loc(f"page.content.{src}")))
+
+    if c.location:
+        lat_field, lon_field = c.location
+        try:
+            lat, lon = float(content.get(lat_field)), float(content.get(lon_field))
+            facts.append(Fact(kind, key, "location", {"lat": lat, "lon": lon},
+                              _loc(f"page.content.{lat_field}/{lon_field}")))
+        except (TypeError, ValueError):
+            pass
+
+    for src, spec in c.object_lists.items():
+        items = []
+        for obj in content.get(src) or []:
+            item = {}
+            for k in spec.keep:
+                value = obj.get(k)
+                if k in spec.labels:
+                    value = (props.get(spec.labels[k]) or {}).get(value, value)
+                item[k] = value
+            items.append(item)
+        if items:
+            facts.append(Fact(kind, key, spec.field, items, _loc(f"page.content.{src}")))
+
+    for src, dst in c.name_lists.items():
+        names = [x.get("name") for x in content.get(src) or [] if isinstance(x, dict) and x.get("name")]
+        if names:
+            facts.append(Fact(kind, key, dst, names, _loc(f"page.content.{src}")))
+
+    for src, dst in c.ref_lists.items():
+        refs = [x.get("slug") or x.get("name") if isinstance(x, dict) else x for x in content.get(src) or []]
+        if refs:
+            facts.append(Fact(kind, key, dst, refs, _loc(f"page.content.{src}")))
+
     for src, dst in (("first_published_at", "first_published_at"), ("updated_at", "cms_updated_at")):
         if not _blank(page.get(src)):
             facts.append(Fact(kind, key, dst, page[src], _loc(f"page.{src}")))
-    body = richtext(content.get("body")).strip()
+    body = richtext(content.get(c.body_field)).strip()
     if body:
-        facts.append(Fact(kind, key, "body_text", body, _loc("page.content.body")))
+        facts.append(Fact(kind, key, "body_text", body, _loc(f"page.content.{c.body_field}")))
     return facts
-
-
-def project_facts(page: dict, content: dict, props: dict) -> list[Fact]:
-    key = page.get("slug") or page.get("full_slug", "")
-    facts = [Fact("project", key, "url_slug", page.get("full_slug"), _loc("page.full_slug"))]
-    for src, dst in PROJECT_FIELDS.items():
-        if not _blank(content.get(src)):
-            facts.append(Fact("project", key, dst, _clean(content[src]), _loc(f"page.content.{src}")))
-
-    if _blank(content.get("title")) and not _blank(page.get("name")):
-        facts.append(Fact("project", key, "name", _clean(page["name"]), _loc("page.name")))
-
-    phases = props.get("projectPhases") or {}
-    if content.get("phase"):
-        facts.append(Fact("project", key, "phase", phases.get(content["phase"], content["phase"]), _loc("page.content.phase")))
-
-    types = props.get("projectTypes") or {}
-    if content.get("type"):
-        facts.append(Fact("project", key, "types", [types.get(t, t) for t in content["type"]], _loc("page.content.type")))
-
-    try:
-        lat, lon = float(content.get("latitude")), float(content.get("longitude"))
-        facts.append(Fact("project", key, "location", {"lat": lat, "lon": lon}, _loc("page.content.latitude/longitude")))
-    except (TypeError, ValueError):
-        pass
-
-    timeline = [
-        {"phase": phases.get(s.get("phase"), s.get("phase")), "schedule": s.get("schedule"), "active": s.get("active")}
-        for s in content.get("timeline") or []
-    ]
-    if timeline:
-        facts.append(Fact("project", key, "timeline", timeline, _loc("page.content.timeline")))
-
-    initiatives = [i.get("name") for i in content.get("initiatives") or [] if isinstance(i, dict) and i.get("name")]
-    if initiatives:
-        facts.append(Fact("project", key, "initiatives", initiatives, _loc("page.content.initiatives")))
-
-    return facts + common_facts("project", key, page, content)
-
-
-def news_facts(page: dict, content: dict) -> list[Fact]:
-    key = page.get("slug") or page.get("full_slug", "")
-    facts = [Fact("news", key, "url_slug", page.get("full_slug"), _loc("page.full_slug"))]
-    for src, dst in NEWS_FIELDS.items():
-        if not _blank(content.get(src)):
-            facts.append(Fact("news", key, dst, _clean(content[src]), _loc(f"page.content.{src}")))
-
-    if _blank(content.get("title")) and not _blank(page.get("name")):
-        # Older posts keep the headline only in the CMS story name.
-        facts.append(Fact("news", key, "title", _clean(page["name"]), _loc("page.name")))
-
-    topics = [t.get("name") for t in content.get("topics") or [] if isinstance(t, dict) and t.get("name")]
-    if topics:
-        facts.append(Fact("news", key, "topics", topics, _loc("page.content.topics")))
-
-    related = []
-    for p in content.get("relatedProjects") or []:
-        related.append(p.get("slug") or p.get("name") if isinstance(p, dict) else p)
-    if related:
-        facts.append(Fact("news", key, "related_projects", related, _loc("page.content.relatedProjects")))
-
-    return facts + common_facts("news", key, page, content)

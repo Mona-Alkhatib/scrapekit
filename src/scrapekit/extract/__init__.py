@@ -31,7 +31,7 @@ class ExtractionError(Exception):
     """Raised when a page or file cannot be parsed. Logged, never fatal."""
 
 
-PageExtractor = Callable[[str, bytes], list[Fact]]
+PageExtractor = Callable[[str, bytes, object], list[Fact]]  # (url, html, the source's extractor_options)
 
 
 def get_page_extractor(name: str) -> PageExtractor:

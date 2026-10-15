@@ -14,7 +14,8 @@ from pathlib import Path
 
 from .db import Store
 from .extract import ExtractionError, Fact, get_page_extractor, pdf
-from .llm import VERIFY_VERSION, DEFAULT_RUN_BUDGET_USD, OpenRouterExtractor, estimate_cost, verify_facts
+from .llm import (DEFAULT_RUN_BUDGET_USD, VERIFY_VERSION, OpenRouterExtractor, estimate_cost, response_schema,
+                  system_prompt, verify_facts)
 from .metrics import RunStats
 from .sources import Source
 
@@ -56,7 +57,7 @@ def run_rules(source: Source, store: Store, stats: RunStats) -> None:
                     store.add_skip(url, "no_text_layer", "scanned PDF, OCR not supported")
                     stats.skips["no_text_layer"] += 1
             else:
-                facts = page_extract(url, data)
+                facts = page_extract(url, data, source.extractor_options)
         except ExtractionError as exc:
             log.warning("extract failed for %s: %s", url, exc)
             store.record_extraction(url, content_hash, ext_id, "failed", str(exc))
@@ -154,6 +155,8 @@ async def run_llm(
     if dry_run:
         return
 
+    prompt = system_prompt(source.publisher, source.llm_focus)
+    schema = response_schema(source.publisher_body_example)
     sem = asyncio.Semaphore(concurrency)
 
     async def one(url: str, content_hash: str, pages: list[str]):
@@ -164,7 +167,7 @@ async def run_llm(
             if stats.llm_cost_usd >= budget:
                 return url, content_hash, pages, None, None, BudgetReached(f"run budget ${budget:.2f} reached")
             try:
-                return url, content_hash, pages, None, await llm.extract(url, pages), None
+                return url, content_hash, pages, None, await llm.extract(url, pages, prompt, schema), None
             except Exception as exc:  # API errors, bad JSON: logged per document, never fatal
                 return url, content_hash, pages, None, None, exc
 

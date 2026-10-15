@@ -22,7 +22,7 @@ def main_text(tree: LexborHTMLParser) -> str:
     return " ".join(root.text(separator=" ").split())[:MAX_TEXT_CHARS]
 
 
-def extract(url: str, html: bytes) -> list[Fact]:
+def extract(url: str, html: bytes, options=None) -> list[Fact]:  # needs no options
     try:
         tree = LexborHTMLParser(html.decode("utf-8", errors="replace"))
     except Exception as exc:  # lexbor raises plain errors on broken input

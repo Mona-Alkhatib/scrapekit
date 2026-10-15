@@ -2,9 +2,9 @@
 
 A fixture folder holds a manifest.json and the files it points to:
 
-    {"https://createto.ca/projects/x": {"file": "projects-x.html", "content_type": "text/html"},
-     "https://a-us.storyblok.com/f/.../a.pdf": {"file": "a.pdf", "content_type": "application/pdf"},
-     "https://a-us.storyblok.com/f/.../gone.pdf": {"status": 404}}
+    {"https://example.org/projects/x": {"file": "projects-x.html", "content_type": "text/html"},
+     "https://files.example.net/a.pdf": {"file": "a.pdf", "content_type": "application/pdf"},
+     "https://files.example.net/gone.pdf": {"status": 404}}
 
 The transport plugs into the normal Fetcher, so the crawler runs exactly as it does live,
 including ETags and 304 Not Modified. Unknown URLs get a 404.

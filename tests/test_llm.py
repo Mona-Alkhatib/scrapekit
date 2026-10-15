@@ -22,7 +22,8 @@ class FakeLLM:
         self.calls = 0
         self.fail = fail
 
-    async def extract(self, url, pages):
+    async def extract(self, url, pages, prompt, schema):
+        self.last_prompt = prompt
         self.calls += 1
         if self.fail:
             raise RuntimeError("503 from provider")
@@ -133,3 +134,30 @@ async def test_limit_counts_only_paid_calls(settings):
     await run_pipeline(settings, CREATETO, llm=llm)
     stats = await run_pipeline(settings, CREATETO, llm=llm, llm_limit=0)  # unchanged: nothing paid
     assert llm.calls == 1 and stats.llm_calls == 0
+
+
+def test_prompt_and_schema_come_from_the_source():
+    from scrapekit.llm import response_schema, system_prompt
+    from scrapekit.sources import Source
+
+    other = Source(name="example", start_urls=("https://example.gov/",), crawl_hosts=("example.gov",),
+                   publisher="the Example County Council", publisher_body_example="Planning Committee")
+    prompt = system_prompt(other.publisher, other.llm_focus)
+    assert "published by the Example County Council." in prompt and "CreateTO" not in prompt
+    org = response_schema(other.publisher_body_example)["schema"]["properties"]["organization"]["description"]
+    assert org.endswith("Planning Committee")
+
+
+def test_no_site_names_outside_sources():
+    """Everything site-specific lives in sources/. This keeps it that way."""
+    import re
+    from pathlib import Path
+
+    pattern = re.compile(r"createto\.ca|CreateTO|storyblok\.com|Toronto")
+    root = Path(__file__).parent.parent / "src" / "scrapekit"
+    offenders = [
+        f"{p.relative_to(root)}:{n}"
+        for p in root.rglob("*.py") if "sources" not in p.parts
+        for n, line in enumerate(p.read_text().splitlines(), 1) if pattern.search(line)
+    ]
+    assert offenders == []

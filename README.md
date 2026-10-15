@@ -128,9 +128,11 @@ Results: [examples/variants/REPORT.md](examples/variants/REPORT.md).
 
 ## Adding a website
 
-1. Create `src/scrapekit/sources/<name>.py` with a `Source` (start URLs, hosts to crawl, sitemap, paths to skip).
+1. Create `src/scrapekit/sources/<name>.py` with a `Source`: start URLs, hosts to crawl, sitemap, paths to skip, and who publishes it (used in the LLM prompt). Copy `sources/createto.py` as a template.
 2. Add it to `src/scrapekit/sources/__init__.py`.
-3. `uv run scrapekit crawl <name>`
+3. `uv run scrapekit run <name>`
+
+With no extractor settings, pages use the generic extractor (title, description, headings, text) and PDFs get the full PDF + LLM treatment. For a site built on Storyblok, add a `StoryblokModel` describing its content types to get structured fields for free. Nothing outside `sources/` names a website; a test enforces it.
 
 ## Tests
 

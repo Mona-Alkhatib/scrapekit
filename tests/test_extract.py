@@ -55,7 +55,8 @@ def make_pdf(pages: list[str]) -> bytes:
 
 
 def test_storyblok_project_fields():
-    facts = {f.field: f for f in storyblok.extract("https://createto.ca/projects/south-river", project_page())}
+    facts = {f.field: f for f in storyblok.extract("https://createto.ca/projects/south-river", project_page(),
+                                                   CREATETO.extractor_options)}
     assert facts["phase"].value == "Leasing"  # code mapped to its label
     assert facts["ward"].value == "Toronto-Danforth"
     assert facts["types"].value == ["Commercial"]
@@ -63,6 +64,11 @@ def test_storyblok_project_fields():
     assert facts["body_text"].value == "A prime site."
     assert "address" not in facts  # blank fields are not facts
     assert facts["phase"].locator == "__NEXT_DATA__ page.content.phase"
+
+
+def test_storyblok_without_a_model_falls_back_to_generic():
+    facts = storyblok.extract("https://createto.ca/projects/south-river", project_page())
+    assert all(f.entity_type == "page" for f in facts)  # no site model, so no project fields
 
 
 def test_pdf_pages_are_one_based_and_dates_parse():

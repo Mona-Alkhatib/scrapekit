@@ -1,8 +1,8 @@
-"""Command line entry point.
+"""Command line entry point. <source> is a name from `scrapekit sources`.
 
-    uv run scrapekit run createto       # crawl + extract, the normal command
-    uv run scrapekit crawl createto     # only download
-    uv run scrapekit extract createto   # only re-extract from saved copies (no network)
+    uv run scrapekit run <source>       # crawl + extract, the normal command
+    uv run scrapekit crawl <source>     # only download
+    uv run scrapekit extract <source>   # only re-extract from saved copies (no network)
 """
 
 import argparse
@@ -132,10 +132,10 @@ def main() -> None:
         if args.reuse_fixtures:
             plan = json.loads((fixtures / "plan.json").read_text())
         else:
-            plan = build_fixtures(replace(Settings(), data_dir=args.data_dir).db_path, fixtures)
+            plan = build_fixtures(replace(Settings(), data_dir=args.data_dir).db_path, fixtures, source)
         llm = None if args.no_llm or not os.environ.get("OPENROUTER_API_KEY") else OpenRouterExtractor(model=args.llm_model)
-        results = asyncio.run(_closing(run_variants(source, fixtures, args.out / ".work", llm, args.llm_budget), llm))
-        text = report(results, plan, args.out / ".work" / "data" / "scrapekit.db")
+        results = asyncio.run(_closing(run_variants(source, fixtures, args.out / ".work", llm, args.llm_budget, plan), llm))
+        text = report(results, plan, args.out / ".work" / "data" / "scrapekit.db", source)
         (args.out / "REPORT.md").write_text(text)
         print(text)
     elif args.command == "export":

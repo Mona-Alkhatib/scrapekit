@@ -49,43 +49,52 @@ DOC_TYPES = [
 ]
 FACT_KINDS = ["address", "project", "decision", "amount", "date", "phase", "organization", "other"]
 
-SYSTEM_PROMPT = """You extract facts from public documents published by CreateTO, the City of Toronto's real estate agency.
+PROMPT_TEMPLATE = """You extract facts from public documents published by {publisher}.
 The document text is split into pages marked [page N]. Use only what the text says. Do not guess.
 For every fact give the page number where it appears and a short excerpt copied exactly from that page (5 to 25 words).
-Prefer facts a researcher tracking city land and development would want: property addresses, project names,
-board or committee decisions, dollar amounts, key dates, and project phases.
+{focus}
 Return at most 15 facts. If a field is unknown, use null."""
 
-SCHEMA = {
-    "name": "document_facts",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["doc_type", "title", "document_date", "organization", "summary", "facts"],
-        "properties": {
-            "doc_type": {"type": "string", "enum": DOC_TYPES},
-            "title": {"type": ["string", "null"]},
-            "document_date": {"type": ["string", "null"], "description": "YYYY-MM-DD if stated in the text"},
-            "organization": {"type": ["string", "null"], "description": "Body that issued it, e.g. CreateTO Board of Directors"},
-            "summary": {"type": "string", "description": "One or two plain sentences"},
-            "facts": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["kind", "value", "page", "excerpt"],
-                    "properties": {
-                        "kind": {"type": "string", "enum": FACT_KINDS},
-                        "value": {"type": "string"},
-                        "page": {"type": "integer"},
-                        "excerpt": {"type": "string"},
+DEFAULT_FOCUS = """Prefer facts a researcher would want: places and addresses, named projects or programs,
+decisions, dollar amounts, key dates, and status changes."""
+
+
+def system_prompt(publisher: str, focus: str | None = None) -> str:
+    """The site-specific parts (who publishes, what matters) come from the Source."""
+    return PROMPT_TEMPLATE.format(publisher=publisher, focus=focus or DEFAULT_FOCUS)
+
+
+def response_schema(body_example: str) -> dict:
+    return {
+        "name": "document_facts",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["doc_type", "title", "document_date", "organization", "summary", "facts"],
+            "properties": {
+                "doc_type": {"type": "string", "enum": DOC_TYPES},
+                "title": {"type": ["string", "null"]},
+                "document_date": {"type": ["string", "null"], "description": "YYYY-MM-DD if stated in the text"},
+                "organization": {"type": ["string", "null"], "description": f"Body that issued it, e.g. {body_example}"},
+                "summary": {"type": "string", "description": "One or two plain sentences"},
+                "facts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["kind", "value", "page", "excerpt"],
+                        "properties": {
+                            "kind": {"type": "string", "enum": FACT_KINDS},
+                            "value": {"type": "string"},
+                            "page": {"type": "integer"},
+                            "excerpt": {"type": "string"},
+                        },
                     },
                 },
             },
         },
-    },
-}
+    }
 
 
 @dataclass
@@ -202,16 +211,16 @@ class OpenRouterExtractor:
         """Identifies a paid answer. Changing the model or prompt means a new paid call."""
         return f"{self.model}|v{PROMPT_VERSION}"
 
-    async def extract(self, url: str, pages: list[str]) -> LlmResult:
+    async def extract(self, url: str, pages: list[str], prompt: str, schema: dict) -> LlmResult:
         text, truncated, pages_sent = build_document_text(pages)
         resp = await self.client.chat.completions.create(
             model=self.model,
             temperature=0,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": f"Source URL: {url}\n\n{text}"},
             ],
-            response_format={"type": "json_schema", "json_schema": SCHEMA},
+            response_format={"type": "json_schema", "json_schema": schema},
             extra_body={"usage": {"include": True}},  # OpenRouter then returns the real cost
         )
         content = resp.choices[0].message.content or ""

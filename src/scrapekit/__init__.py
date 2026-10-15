@@ -1,1 +1,1 @@
-"""Polite crawler for createto.ca and its linked files."""
+"""scrapekit: a polite, source-pluggable crawler that turns public websites and their linked files into data."""

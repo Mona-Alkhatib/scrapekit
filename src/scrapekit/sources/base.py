@@ -1,6 +1,7 @@
 """A Source describes one website. Adding a new site means writing one of these, not changing the crawler."""
 
 from dataclasses import dataclass
+from typing import Any
 
 DEFAULT_FILE_EXTENSIONS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".ppt", ".pptx")
 
@@ -21,5 +22,10 @@ class Source:
     # fixtures, and the natural hook for backfilling a chosen list of pages.
     url_allowlist: frozenset[str] | None = None
     page_extractor: str = "generic"  # "generic" works anywhere; "storyblok" reads Next.js + Storyblok JSON
+    extractor_options: Any = None  # site-specific settings for the page extractor, e.g. a StoryblokModel
+    # Who publishes this site's documents, used in the LLM prompt so the model has the right context.
+    publisher: str = "a public organization"
+    publisher_body_example: str = "Board of Directors"  # example of an issuing body, for the LLM schema
+    llm_focus: str | None = None  # which facts matter for this site, in the LLM prompt; None = a generic default
     notes: str = ""  # what we learned about the site, shown by `scrapekit sources`
     tags: tuple[str, ...] = ()

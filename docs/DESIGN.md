@@ -77,7 +77,18 @@ To add a new website:
 2. Add it to the list in `sources/__init__.py`.
 3. Run `uv run scrapekit crawl <name>`.
 
-A test (`test_a_new_source_needs_only_a_config`) proves this: it crawls a made-up second website with no crawler changes. In round 2, a Source can also point to its own extractor for site-specific fields, with a generic extractor as the fallback.
+What a Source can say about its website:
+
+| Field | What it controls | CreateTO value |
+|---|---|---|
+| `start_urls`, `crawl_hosts`, `sitemap_urls` | Where crawling starts and which hosts' pages are crawled | `https://createto.ca/`, `createto.ca` + `www.createto.ca`, the sitemap |
+| `excluded_path_prefixes` | Public but useless pages to skip | `/system/`, `/search` |
+| `page_extractor` + `extractor_options` | Which extractor reads pages, and the site's content model for it | `storyblok` + `CREATETO_MODEL` (which CMS components become projects and news, and which CMS fields map to which of our fields) |
+| `publisher`, `publisher_body_example`, `llm_focus` | The site-specific parts of the LLM prompt: who publishes the documents and which facts matter | "CreateTO, the City of Toronto's real estate agency", "CreateTO Board of Directors", city land and development |
+| `immutable_url_patterns` | File URLs that never change, so saved copies are not re-checked | Storyblok asset URLs |
+| `url_allowlist` | Restrict a run to a fixed list of URLs (replay, backfills) | not set |
+
+**Rule: nothing outside `sources/` names a website.** A test (`test_no_site_names_outside_sources`) fails if a site name or host appears in any other code file. Another test (`test_a_new_source_needs_only_a_config`) crawls a made-up second website with no crawler changes, and `test_prompt_and_schema_come_from_the_source` checks the LLM prompt is built from the Source.
 
 ### Code modules
 
@@ -119,7 +130,7 @@ Storing one row per field (instead of one wide row per project) makes history si
 
 | Extractor | Used for | How |
 |---|---|---|
-| `storyblok` | createto.ca project and news pages | Reads the CMS record embedded in the page (`__NEXT_DATA__` JSON). Exact values, free, no AI. Named after the technology, so other Storyblok sites can reuse it. |
+| `storyblok` | Sites built with Next.js + the Storyblok CMS, like createto.ca | Reads the CMS record embedded in the page (`__NEXT_DATA__` JSON). Exact values, free, no AI. The extractor knows how Storyblok pages are shaped, but nothing about one site: each site passes its own content model (`StoryblokModel`: components, field mappings, label lookups) from its Source. CreateTO's model is in `sources/createto.py`. |
 | `generic` | Any HTML page, and static pages on createto.ca | Title, meta description, headings, main text. Works on any site. |
 | `pdf` (pass 1) | Every linked PDF | Text of each page (saved with 1-based page numbers for citing), page count, PDF metadata dates, first page excerpt. Scanned PDFs with no text are logged as `no_text_layer`. |
 
@@ -218,13 +229,13 @@ flowchart LR
 
 - `ReplayTransport` plugs into the same HTTP client, so the code under test is exactly the code that runs live. It serves ETags and answers `304 Not Modified`, like a real server.
 - A replay run limits the source to the fixture URLs with `url_allowlist` (other links are logged as `not_in_allowlist`). The same allowlist is the natural hook for backfilling a chosen list of pages.
-- `uv run scrapekit variants createto` takes a small real slice of the crawl (homepage, project and news pages, and their smallest PDFs), builds three fixture sets, and runs four scenarios into a fresh database:
+- `uv run scrapekit variants <source>` takes a small real slice of the crawl (the start page, plus pages that produced structured entities and link to small PDFs, chosen by what was extracted rather than by URL patterns), builds three fixture sets, and runs four scenarios into a fresh database. The "changed source" fixture edits one real extracted value in a saved page and amends one PDF; the "failed" fixture corrupts one PDF and removes another (404):
 
 | Run | Fixture | What it shows |
 |---|---|---|
 | 1. first run | base | Everything new, LLM pays for each PDF |
 | 2. unchanged repeat | base | All 304, nothing re-extracted, 0 paid calls |
-| 3. changed source | changed | A project's phase edited, a PDF amended with an extra page: only those two are re-processed, old values kept as history, 1 paid call |
+| 3. changed source | changed | One extracted value edited in a page (the committed example: a project's phase), a PDF amended with an extra page: only those two are re-processed, old values kept as history, 1 paid call |
 | 4. failed file | failed | One PDF corrupt, one returns 404: both logged, the run continues |
 
 The result is written to `examples/variants/REPORT.md`. Reviewers can re-run it from the committed fixtures with no crawl: `uv run scrapekit variants createto --reuse-fixtures` (add `--no-llm` to skip the few cents of LLM cost).
@@ -288,7 +299,7 @@ flowchart TD
 
 | Decision | Why | What we gave up |
 |---|---|---|
-| Website details in a `Source` config, not in code | Adding a site is cheap and safe, the crawler is tested once | Very unusual sites may need a custom hook (planned: per-source extractor) |
+| Website details in a `Source` config, not in code | Adding a site is cheap and safe, the crawler is tested once; a test keeps site names out of the code | A site on a new CMS needs a new extractor module (once), then only config for each site using that CMS |
 | Plain async Python (`httpx`) instead of Scrapy | Small, easy to read and explain, enough for ~250 pages | Scrapy's built-in middleware ecosystem |
 | No headless browser | Pages are server-rendered | Would need Playwright if the site moved to client-side rendering |
 | SQLite + files on disk | Zero setup, one file to hand over, easy to query | Not built for many writers at once (Postgres would be the next step) |
