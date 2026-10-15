@@ -142,3 +142,11 @@ async def test_immutable_files_are_not_rechecked(settings):
 
     stats = await crawl(replace(settings, revalidate_all=True), CREATETO)
     assert pdf_route.call_count == 2
+
+
+@respx.mock
+async def test_robots_txt_fetched_once_per_host(settings):
+    mock_site(respx.mock)
+    await crawl(settings, CREATETO)
+    robots = [c for c in respx.mock.calls if c.request.url.path == "/robots.txt" and c.request.url.host == "createto.ca"]
+    assert len(robots) == 1

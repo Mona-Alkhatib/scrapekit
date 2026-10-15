@@ -20,7 +20,7 @@ Two runs into a fresh database: a first run, then an unchanged repeat 14 minutes
 | | Run 1: first run | Run 2: unchanged repeat |
 |---|---|---|
 | Time | 14.0 min | 4.6 min |
-| HTTP requests | 738 | 299 (274 answered `304 Not Modified`) |
+| HTTP requests | 738 | 299 (274 answered `304 Not Modified`) [1] |
 | Downloaded | 990 MB | 49 MB |
 | Pages processed | 250 | 250 checked, 0 changed |
 | Files processed | 468 (466 PDFs with text, 2 scanned) | 467 unchanged (440 not re-checked: immutable URLs), 1 now 404 |
@@ -32,6 +32,8 @@ Two runs into a fresh database: a first run, then an unchanged repeat 14 minutes
 | LLM tokens in / out | 1,359,277 / 268,545 | 0 / 0 |
 | LLM cost | $0.7426 (actual, reported by OpenRouter) | $0.00 |
 | Skipped or failed links | 190, each with a reason: 170 off-domain, 7 mailto/tel, 3 over 50 MB, 3 blocked by robots.txt, 2 excluded paths, 2 dead links, 2 scanned PDFs, 1 forbidden (403) | same, plus 1 toronto.ca PDF that returned 404 in run 2 and was still 404 when re-checked (logged, last good facts kept) |
+
+[1] These runs had a since-fixed bug: parallel workers could each fetch the same host's `robots.txt` (up to 4 times instead of once). Across the 8 hosts contacted, that is at most 24 extra requests per run (about 3% of run 1, 8% of run 2). Fixed with a per-host lock; an unchanged 10-page run went from 18 to 15 requests. All other numbers are unaffected.
 
 **Costs** (labeled):
 

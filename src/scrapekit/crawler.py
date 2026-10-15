@@ -41,6 +41,7 @@ class Crawler:
         self.skipped: set[str] = set()
         self.pages_queued = 0
         self.robots: dict[str, RobotFileParser] = {}
+        self.robots_locks: dict[str, asyncio.Lock] = {}
 
     # ---------- public ----------
 
@@ -92,12 +93,14 @@ class Crawler:
 
     async def allowed(self, url: str) -> bool:
         host = urlparse(url).netloc
-        if host not in self.robots:
-            parser = RobotFileParser()
-            result = await self.fetcher.fetch(f"{urlparse(url).scheme}://{host}/robots.txt")
-            # No robots.txt (or an error) means no rules, per the standard.
-            parser.parse(result.body.decode("utf-8", "replace").splitlines() if result.ok else [])
-            self.robots[host] = parser
+        # One lock per host, so parallel workers fetch robots.txt once, not once each.
+        async with self.robots_locks.setdefault(host, asyncio.Lock()):
+            if host not in self.robots:
+                parser = RobotFileParser()
+                result = await self.fetcher.fetch(f"{urlparse(url).scheme}://{host}/robots.txt")
+                # No robots.txt (or an error) means no rules, per the standard.
+                parser.parse(result.body.decode("utf-8", "replace").splitlines() if result.ok else [])
+                self.robots[host] = parser
         return self.robots[host].can_fetch(self.settings.user_agent, url)
 
     async def sitemap_urls(self) -> list[str]:
