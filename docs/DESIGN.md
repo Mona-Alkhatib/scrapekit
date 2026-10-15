@@ -317,7 +317,7 @@ Measured on the live site: the unchanged repeat made 299 requests instead of 738
 | One row per fact, not one wide row per project | Each field keeps its own source and history; works for any entity type and any site | Consumers need a pivot to get one row per project (the export's `entities.jsonl` does this) |
 | Rules first, AI only for PDFs | Exact, free and testable where the data is structured | Free text inside pages is not mined for facts yet |
 | Hash raw bytes for change detection | Exact and simple | Next.js pages may change bytes on every deploy without real content changes. Fact-level comparison handles this: a cosmetic change re-runs the cheap parser, but no fact changes and no AI call is made. |
-| Do not re-check files with immutable URLs (Storyblok gives every upload a new URL) | The live repeat run skipped 440 requests and took 4.6 minutes instead of 14 | A file deleted or corrupted in place would not be noticed until a full re-check. Mitigation: schedule `--revalidate-all` periodically (for example weekly). The variant demo uses it so file failures are visible. |
+| Do not re-check files with immutable URLs (Storyblok gives every upload a new URL) | The live repeat run skipped 440 requests and took 4.6 minutes instead of 14 | A file deleted or corrupted in place would not be noticed until a full re-check. Mitigation: schedule `--revalidate-all` periodically (for example weekly). The variant demo uses it so file failures are visible. Checked a day later: a full re-check of all 440 answered 304 (unchanged). |
 
 ## 11. Build rounds
 

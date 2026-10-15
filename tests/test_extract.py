@@ -165,3 +165,15 @@ def test_filtered_listing_pages_are_separate_entities():
     keys = {f.entity_key for url in ("https://example.org/news", "https://example.org/news?topic=a")
             for f in generic_html.extract(url, html)}
     assert keys == {"news", "news?topic=a"}
+
+
+def test_a_new_phase_needs_no_code_change():
+    """Phase labels come from the lookup table inside each page, not from our code."""
+    page = storyblok.load_next_data(project_page("rezoning"))
+    page["props"]["pageProps"]["projectPhases"]["rezoning"] = "Rezoning Review"  # a phase the site just added
+    html = b'<script id="__NEXT_DATA__" type="application/json">' + json.dumps(page).encode() + b"</script>"
+    facts = {f.field: f for f in storyblok.extract("https://example.org/projects/south-river", html, CREATETO.extractor_options)}
+    assert facts["phase"].value == "Rezoning Review"
+    unknown = {f.field: f for f in storyblok.extract("https://example.org/projects/x", project_page("brandNewCode"),
+                                                     CREATETO.extractor_options)}
+    assert unknown["phase"].value == "brandNewCode"  # no label yet: the code is kept, not dropped
