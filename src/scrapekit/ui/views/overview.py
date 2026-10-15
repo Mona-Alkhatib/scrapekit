@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from scrapekit.sources import SOURCES
 from scrapekit.ui import common, queries as q
 
 st.title("Overview")
@@ -50,8 +51,10 @@ if places:
 
 left, right = st.columns(2)
 with left:
-    st.subheader("Projects per phase")
-    bars(q.label_counts(conn, source, "project", "phase"), "value", horizontal=True)
+    config = SOURCES.get(source)
+    for kind, field in (config.overview_labels if config else ()):  # the site's own label fields, from its config
+        st.subheader(f"{kind} by {field}")
+        bars(q.label_counts(conn, source, kind, field), "value", horizontal=True)
     st.subheader("Files per host")
     st.caption("Files are downloaded from any host; pages are only crawled on the source's own site.")
     bars(q.files_per_host(conn, source), "host", horizontal=True)

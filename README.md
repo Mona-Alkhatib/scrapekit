@@ -11,7 +11,7 @@ The first source is [CreateTO](https://createto.ca). Each website is described b
 - Writes a metrics report for every run (time, requests, files, records, paid calls, cost).
 - Repeat runs use conditional requests and skip files whose URL never changes, so unchanged content is not downloaded or processed again.
 - Everything site-specific lives in one config file per website; a test keeps site names out of the rest of the code.
-- A read-only data browser (`scrapekit ui`) lets a downstream engineer navigate runs, entities, facts, pages and files, and skips, down to the raw file and the quoted PDF page.
+- A read-only data browser (`scrapekit ui`) lets a downstream engineer navigate runs, entities, facts, pages and files, and skips, down to the raw file and the quoted PDF page, with charts, a data dictionary, and an Ask AI page that answers questions with SQL you can see.
 
 How it works: see [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -44,6 +44,7 @@ Two runs into a fresh database: a first run, then an unchanged repeat 14 minutes
 | LLM, first run (`google/gemini-3.1-flash-lite` via OpenRouter) | $0.7426 | Actual, from OpenRouter usage data |
 | LLM, unchanged repeat | $0.00 | Actual (all answers cached by content hash) |
 | LLM, development (trials and variant runs) | about $0.06 | Actual, summed from run reports |
+| Ask AI (data browser) | about $0.001 per question; $0.013 for all checks while building | Actual, from OpenRouter usage data |
 | Hosting | $0.00 | Ran locally on a laptop |
 | Hosting if deployed (small VM running the job daily) | about $5 to $10 per month | Estimate |
 | Storage (893 MB raw copies + 19 MB SQLite) | about $0.02 per month on S3-class storage | Estimate |
@@ -139,14 +140,19 @@ uv run scrapekit ui --data-dir data/submission    # opens http://localhost:8501
 
 | Page | What you can do |
 |---|---|
+| Overview | Headline numbers, a map of every entity with a location, and charts: facts by type and method, entities per year (with the 5-year window), projects per phase, PDF document types, files per host, skips by reason, runs compared. |
 | Runs | Every run with status (ok, ok with failures, incomplete), time, requests, 304s, downloads, facts, skips and LLM cost. Select a run for its skips and the facts it added, changed or removed. |
 | Entities | Projects, news items, documents and pages, filtered by type or searched by any value. Select one for all its facts; select a fact for its provenance; toggle history to see replaced values. |
 | Facts | Every value, filtered by entity type, field, method (rules or LLM), run, current or all. |
 | Pages & files | Every URL with host, status, saved versions, the raw copy (PDF viewer or HTML source, plus download), the facts read from it, its links and its skips. |
 | Skip log | Every skipped or failed link with its reason, filtered by reason, run or URL. |
+| Data dictionary | Every field per entity type: what it means, how it was extracted (rules or LLM), coverage, an example value and locator. Plus a guide to the database tables and query tips. |
+| Ask AI | Ask a question in plain English. The model writes one SQL query, it runs on a connection that can only read, and you get the answer plus the SQL and the rows to check it. About $0.001 per question, capped at $0.25 per session. Needs `OPENROUTER_API_KEY`; every other page works without it. |
 
 **Provenance panel:** for any fact, its source URL, method, locator, run, when it was valid and the content hash of the snapshot it came from. For an LLM fact from a PDF, the saved text of the cited page with the quote highlighted.
 
+![Overview](docs/img/ui-overview.png)
+![Ask AI: the answer, the SQL and the rows](docs/img/ui-ask.png)
 ![Runs](docs/img/ui-runs.png)
 ![A PDF fact with its quote highlighted on the cited page](docs/img/ui-provenance.png)
 ![Skip log](docs/img/ui-skips.png)

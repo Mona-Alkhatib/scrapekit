@@ -72,6 +72,12 @@ CREATETO = Source(
         "Prefer facts a researcher tracking city land and development would want: property addresses, project names,\n"
         "board or committee decisions, dollar amounts, key dates, and project phases."
     ),
+    overview_labels=(("project", "phase"), ("project", "ward")),
+    ask_examples=(
+        "How many projects are in each phase?",
+        "Which projects are in Delivery and Construction, with their address and ward?",
+        "Which PDFs are board minutes from 2024 or later?",
+    ),
     field_docs={
         "project.name": "Project name as shown on the site.",
         "project.summary": "Short description of the project from the CMS.",

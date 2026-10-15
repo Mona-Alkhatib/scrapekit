@@ -97,3 +97,54 @@ def test_current_facts_view_has_plain_values(db):  # noqa: F811
 def test_prompt_teaches_the_view_with_examples(db):  # noqa: F811
     prompt = ask.Asker(FakeChat(), db, docs={}, source="demo").system
     assert "current_facts(" in prompt and "GROUP BY" in prompt and "MAX(CASE WHEN field" in prompt
+
+
+def test_huge_values_are_refused_and_cells_trimmed(db):  # noqa: F811
+    with pytest.raises(sqlite3.Error):
+        ask.run_sql(db, "SELECT zeroblob(50000000)")
+    _, rows, _ = ask.run_sql(db, "SELECT printf('%.*c', 5000, 'x')")
+    assert len(rows[0][0]) <= ask.MAX_CELL_CHARS + 3
+
+
+def test_dangerous_functions_are_blocked(db):  # noqa: F811
+    for sql in ("SELECT fts3_tokenizer('simple')", "SELECT load_extension('x')"):
+        with pytest.raises(sqlite3.Error):
+            ask.run_sql(db, sql)
+
+
+def test_answer_markdown_is_neutralized():
+    from scrapekit.ui.ask import plain_markdown
+
+    shown = plain_markdown("See ![x](https://evil.example/?q=1) and [click](https://phish.example) for $5")
+    assert "![" not in shown and "](" not in shown and "\\$5" in shown
+
+
+class FailingChat(FakeChat):
+    def complete(self, messages, schema):
+        if self.sent:
+            raise TimeoutError("network down")
+        return super().complete(messages, schema)
+
+
+def test_failure_mid_question_keeps_the_cost_already_spent(db):  # noqa: F811
+    result = ask.Asker(FailingChat(GOOD), db, docs={}, source="demo").ask("q")
+    assert result.cost_usd == pytest.approx(0.001)
+    assert result.rows == [["alpha"]]  # the query worked, so its rows are still shown
+    assert "network down" in result.answer
+
+
+def test_prompt_examples_are_generic(db):  # noqa: F811
+    prompt = ask.Asker(FakeChat(), db, docs={}, source="demo").system
+    examples = prompt.split("Examples:")[1].split("Main view")[0]
+    assert "project" not in examples and "phase" not in examples
+
+
+def test_ui_code_names_no_site_vocabulary():
+    """Example questions and charts that only make sense for one site belong in its Source config."""
+    import re
+
+    words = re.compile(r"Leasing|Delivery and Construction|board minutes|Etobicoke|'phase'|\"phase\"")
+    root = Path(__file__).parent.parent / "src" / "scrapekit" / "ui"
+    offenders = [f"{p.name}:{n}" for p in root.rglob("*.py")
+                 for n, line in enumerate(p.read_text().splitlines(), 1) if words.search(line)]
+    assert offenders == []

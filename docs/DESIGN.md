@@ -92,8 +92,9 @@ What a Source can say about its website:
 | `publisher`, `publisher_body_example`, `llm_focus` | The site-specific parts of the LLM prompt: who publishes the documents and which facts matter | "CreateTO, the City of Toronto's real estate agency", "CreateTO Board of Directors", city land and development |
 | `immutable_url_patterns` | File URLs that never change, so saved copies are not re-checked | Storyblok asset URLs |
 | `url_allowlist` | Restrict a run to a fixed list of URLs (replay, backfills) | not set |
+| `field_docs`, `overview_labels`, `ask_examples` | The data browser: what the site's own fields mean, which label fields get a chart, example questions for Ask AI | ward, phase, councillor ...; phase and ward charts; 3 questions |
 
-**Rule: nothing outside `sources/` names a website.** A test (`test_no_site_names_outside_sources`) fails if a site name or host appears in any other code file. Another test (`test_a_new_source_needs_only_a_config`) crawls a made-up second website with no crawler changes, and `test_prompt_and_schema_come_from_the_source` checks the LLM prompt is built from the Source.
+**Rule: nothing outside `sources/` names a website.** A test (`test_no_site_names_outside_sources`) fails if a site name or host appears in any other code file. `test_ui_code_names_no_site_vocabulary` does the same for the UI (no site-specific example questions, field values or charts). Another test (`test_a_new_source_needs_only_a_config`) crawls a made-up second website with no crawler changes, and `test_prompt_and_schema_come_from_the_source` checks the LLM prompt is built from the Source.
 
 ### Code modules
 
@@ -113,7 +114,7 @@ What a Source can say about its website:
 | `export.py` | JSON Lines export for other services. |
 | `replay.py` | Serves saved copies as if they were the website. |
 | `variants.py` | Builds fixtures and runs the first / unchanged / changed / failed scenarios. |
-| `ui/` | Read-only data browser (section 12): `queries.py` holds all SQL, `views/` one file per page. |
+| `ui/` | Read-only data browser (section 12): `queries.py` holds all SQL, `views/` one file per page, `ask.py` the text-to-SQL agent. |
 | `cli.py` | `scrapekit run / crawl / extract / export / variants / ui` and `scrapekit sources` |
 
 ## 6. Extraction: from saved copies to facts
@@ -331,6 +332,7 @@ Measured on the live site: the unchanged repeat made 299 requests instead of 738
 | UI-2 | Entities and the provenance panel (PDF page with the quote highlighted) | Done |
 | UI-3 | Pages & files with raw viewer, facts | Done |
 | UI-4 | Review fixes, docs, screenshots | Done |
+| UI-5 | Overview charts and map, data dictionary, Ask AI | Done |
 
 ## 12. Data browser (Part 2)
 
@@ -364,6 +366,30 @@ scrapekit run   ──writes──▶  data/scrapekit.db  +  data/raw/<hash>
 - "Facts this run changed" matches removals by time window; a run that never finished is bounded by the next run of the same source.
 - PDF text is shown as escaped HTML, never as Markdown, so `$` amounts and `#` or `1.` at line starts are shown exactly as in the source.
 - PDFs over 15 MB are offered as a download instead of an inline viewer.
+
+**Overview.** Headline numbers and charts, each from one function in `queries.py`. The map uses every entity that has a `location` fact, so a new source with locations gets a map for free.
+
+**Data dictionary.** Field descriptions live next to the code that produces the field: generic ones (`pdf_*`, `llm_*`, `title`, `body_text`, `location`) in the extractor modules as `FIELD_DOCS`, site-specific ones (`ward`, `phase`, `councillor`) in the Source config as `field_docs`. A new website brings its own descriptions in its config. Coverage and examples are computed from the data, so the page is never out of date. A test fails if a field the CreateTO config can produce has no description.
+
+**Ask AI (text to SQL).**
+
+```
+question ─▶ model writes one SQL query (sees: tables, columns, data dictionary, 2 worked examples)
+         ─▶ check: one SELECT / WITH statement only
+         ─▶ run on its own connection: read-only file, authorizer allows only reading, 500 rows, 5 seconds
+         ─▶ SQL error? send the error back, one retry
+         ─▶ model answers from up to 50 rows ─▶ page shows answer + SQL + rows + actual cost
+```
+
+| Choice | Why |
+|---|---|
+| The model writes SQL, it does not answer from memory | The answer is computed from our data, and the engineer sees the exact query and rows, so it can be checked. |
+| A temporary `current_facts` view with plain-text values | Fact values are stored as JSON (`"Leasing"` with quotes). With the raw table the model compared against plain text and returned 0 rows or wrong counts; with the view and two generic examples, all three test questions were correct (re-checked after every prompt change). The view lives in memory on the AI's connection only. |
+| Three layers of protection | The file is opened read-only; a statement check allows one SELECT; SQLite's authorizer denies everything except reading, and also blocks functions that reach native code or files (`fts3_tokenizer`, `load_extension`). A write hidden in `WITH ... DELETE` is still refused. A reviewer tried 29 attack queries; the database file was unchanged. |
+| Limits | 500 rows, 5 seconds, values up to 1 MB (stops `zeroblob(900000000)` from using gigabytes), cells trimmed to 1,000 characters, 2 attempts, last 20 questions kept, $0.25 per browser session. |
+| Scraped text is untrusted | It reaches the answer step, so a poisoned page could ask the model for a link or an image. The answer is shown with every Markdown character escaped: no links, no images, no math. The model has no tools, so the worst case is a misleading sentence next to the real SQL and rows. |
+| Cost is always counted | A failed call keeps the cost already spent; if the provider reports no cost, a conservative $0.002 per call is counted so the cap still works. |
+| Same model as the PDF pass | `google/gemini-3.1-flash-lite`, about $0.001 per question, configurable with `SCRAPEKIT_LLM_MODEL`. |
 
 **Out of scope for now:** starting crawls from the UI, login, editing data, a hosted deployment.
 

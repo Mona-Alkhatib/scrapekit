@@ -28,21 +28,20 @@ budget_left = ask.DEFAULT_SESSION_BUDGET_USD - spent
 st.progress(min(spent / ask.DEFAULT_SESSION_BUDGET_USD, 1.0),
             text=f"Spent this session: \\${spent:.4f} of \\${ask.DEFAULT_SESSION_BUDGET_USD:.2f}")
 
-def md(text: str) -> str:
-    """Markdown-safe text: Streamlit reads $...$ as a math formula, and answers often contain dollar amounts."""
-    return text.replace("$", "\\$")
+MAX_HISTORY = 20
+md = ask.plain_markdown  # model and user text: no links, images or math, shown exactly as written
 
 
-EXAMPLES = [
-    "How many projects are in each phase?",
-    "Which projects are in Delivery and Construction, with their address and ward?",
+GENERIC_EXAMPLES = (
+    "How many entities of each type do we have?",
     "Which hosts did we download files from, and how many from each?",
-    "Which PDFs are board minutes from 2024 or later?",
     "Which facts changed between runs?",
     "Why were links skipped in the last run, by reason?",
-]
-picked = st.pills("Examples", EXAMPLES, selection_mode="single")
-question = st.text_input("Your question", value=picked or "", placeholder="e.g. Which projects are in Etobicoke?")
+)
+config = SOURCES.get(source)
+examples = [*(config.ask_examples if config else ()), *GENERIC_EXAMPLES]
+picked = st.pills("Examples", examples, selection_mode="single")
+question = st.text_input("Your question", value=picked or "", placeholder="Ask anything about the data")
 
 if st.button("Ask", type="primary", disabled=not question or budget_left <= 0):
     with st.spinner("Writing and running the query ..."):
@@ -53,6 +52,7 @@ if st.button("Ask", type="primary", disabled=not question or budget_left <= 0):
             result = ask.AskResult(question, error=f"{type(exc).__name__}: {exc}")
     st.session_state["ai_spent"] = spent + result.cost_usd
     history.insert(0, result)
+    del history[MAX_HISTORY:]  # keep memory bounded
     st.rerun()
 
 for i, r in enumerate(history):

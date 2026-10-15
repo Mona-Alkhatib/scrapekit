@@ -27,6 +27,10 @@ class Source:
     publisher: str = "a public organization"
     publisher_body_example: str = "Board of Directors"  # example of an issuing body, for the LLM schema
     llm_focus: str | None = None  # which facts matter for this site, in the LLM prompt; None = a generic default
+    # Charts of "how many entities per value" for this site's own label fields, as (entity_type, field).
+    overview_labels: tuple[tuple[str, str], ...] = ()
+    # Example questions offered on the UI's Ask AI page; generic ones are used when empty.
+    ask_examples: tuple[str, ...] = ()
     # What this site's own fields mean ("entity_type.field" -> text), shown in the UI's data dictionary.
     field_docs: dict[str, str] = field(default_factory=dict)
     notes: str = ""  # what we learned about the site, shown by `scrapekit sources`

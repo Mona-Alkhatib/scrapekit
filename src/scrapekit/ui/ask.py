@@ -26,14 +26,41 @@ MAX_ROWS = 500  # rows returned to the page
 ROWS_FOR_ANSWER = 50  # rows the model sees when writing the answer
 TIMEOUT_S = 5.0
 MAX_ATTEMPTS = 2  # first query, plus one retry after an SQL error
+MAX_VALUE_BYTES = 1_000_000  # SQLite refuses to build any string or blob bigger than this (memory guard)
+MAX_CELL_CHARS = 1_000  # each cell is trimmed to this before it is shown or sent to the model
+FALLBACK_CALL_COST_USD = 0.002  # counted when the provider does not report a cost, so the budget still works
 DEFAULT_SESSION_BUDGET_USD = 0.25
 
-# The only things AI-written SQL may do: read tables and call functions (json_extract, COUNT ...).
+# The only things AI-written SQL may do: read tables and call functions (json_extract, COUNT ...),
+# except functions that touch native code or files.
 ALLOWED_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE}
+BLOCKED_FUNCTIONS = {"fts3_tokenizer", "load_extension", "readfile", "writefile", "edit", "zipfile"}
+
+
+def _authorize(action, arg1, arg2, *_):
+    if action not in ALLOWED_ACTIONS:
+        return sqlite3.SQLITE_DENY
+    if action == sqlite3.SQLITE_FUNCTION and (arg2 or "").lower() in BLOCKED_FUNCTIONS:
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def _cell(value):
+    if isinstance(value, (bytes, bytearray)):
+        return f"<{len(value)} bytes>"
+    if isinstance(value, str) and len(value) > MAX_CELL_CHARS:
+        return value[:MAX_CELL_CHARS] + "..."
+    return value
+
+
+def plain_markdown(text: str) -> str:
+    """Model or user text shown through Streamlit markdown, with every markdown character escaped.
+    Stops links and images (a poisoned web page could ask the model for one) and $...$ math."""
+    return re.sub(r"([\\`*_{}\[\]()#+\-.!<>|$~])", r"\\\1", text)
 
 
 # A temporary view on the AI's own connection (temp objects live in memory, the database file is untouched).
-# Fact values are stored as JSON ("\"Leasing\""); here they are plain text, which models get right far more often.
+# Fact values are stored as JSON (a text value keeps its quotes); here they are plain text, which models get right far more often.
 CURRENT_FACTS_VIEW = """CREATE TEMP VIEW IF NOT EXISTS current_facts AS
     SELECT id, source, entity_type, entity_key, field, json_extract(value, '$') AS value, source_url, locator,
            excerpt, method, run_id, valid_from
@@ -65,7 +92,8 @@ def run_sql(db_path: Path, sql: str, max_rows: int = MAX_ROWS, timeout_s: float 
     text = check_sql(sql)
     conn = reader(db_path)  # a separate connection: the authorizer must not affect the UI's own queries
     try:
-        conn.set_authorizer(lambda action, *_: sqlite3.SQLITE_OK if action in ALLOWED_ACTIONS else sqlite3.SQLITE_DENY)
+        conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
+        conn.set_authorizer(_authorize)
         deadline = time.monotonic() + timeout_s
         conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10_000)
         try:
@@ -76,7 +104,7 @@ def run_sql(db_path: Path, sql: str, max_rows: int = MAX_ROWS, timeout_s: float 
                 raise sqlite3.OperationalError(f"the query took longer than {timeout_s:g} s and was stopped") from exc
             raise
         columns = [d[0] for d in cur.description or []]
-        return columns, [list(r) for r in rows[:max_rows]], len(rows) > max_rows
+        return columns, [[_cell(v) for v in r] for r in rows[:max_rows]], len(rows) > max_rows
     finally:
         conn.close()
 
@@ -111,14 +139,14 @@ Use the facts table only for history or changes (valid_to, superseded_by; its va
 Return at most 200 rows unless the question asks for a count. Prefer readable columns (names, titles, urls).
 
 Examples:
-- How many projects per phase?
-  SELECT value AS phase, COUNT(*) AS projects FROM current_facts
-  WHERE source = '{source}' AND entity_type = 'project' AND field = 'phase' GROUP BY value ORDER BY projects DESC
-- One row per project with several fields, filtered by one of them:
-  SELECT entity_key, MAX(CASE WHEN field = 'name' THEN value END) AS name,
-         MAX(CASE WHEN field = 'address' THEN value END) AS address
-  FROM current_facts WHERE source = '{source}' AND entity_type = 'project'
-  GROUP BY entity_key HAVING MAX(CASE WHEN field = 'phase' THEN value END) = 'Leasing'
+- How many documents of each type?
+  SELECT value AS doc_type, COUNT(*) AS documents FROM current_facts
+  WHERE source = '{source}' AND entity_type = 'document' AND field = 'llm_doc_type' GROUP BY value ORDER BY documents DESC
+- One row per document with several fields, filtered by one of them:
+  SELECT entity_key, MAX(CASE WHEN field = 'llm_title' THEN value END) AS title,
+         MAX(CASE WHEN field = 'llm_document_date' THEN value END) AS document_date
+  FROM current_facts WHERE source = '{source}' AND entity_type = 'document'
+  GROUP BY entity_key HAVING MAX(CASE WHEN field = 'llm_doc_type' THEN value END) = 'annual_report'
 
 {schema}"""
 
@@ -160,9 +188,13 @@ class Asker:
         if result.cost_usd >= budget_left:
             result.error = "Session budget reached: no more paid calls in this session."
             return None
-        data, cost = self.llm.complete(messages, schema)
+        try:
+            data, cost = self.llm.complete(messages, schema)
+        except Exception as exc:  # network, timeout, bad JSON: keep what was already spent and report it
+            result.error = f"The model call failed: {type(exc).__name__}: {exc}"
+            return None
         result.cost_usd += cost
-        return data
+        return data if isinstance(data, dict) else {}
 
     def ask(self, question: str, budget_left: float = DEFAULT_SESSION_BUDGET_USD) -> AskResult:
         result = AskResult(question)
@@ -192,10 +224,9 @@ class Asker:
                                                 {"role": "user", "content": content}], ANSWER_SCHEMA)
         if data is not None:
             result.answer = data.get("answer", "")
-            result.error = None
         else:
-            result.error = None
-            result.answer = "(Session budget reached before the summary; the rows below are the answer.)"
+            result.answer = f"(No summary: {result.error}) The rows below are the answer."
+        result.error = None
         return result
 
 
@@ -209,7 +240,7 @@ class OpenRouterChat:
         if not key:
             raise RuntimeError("OPENROUTER_API_KEY is not set")
         self.model = model or os.environ.get("SCRAPEKIT_LLM_MODEL") or DEFAULT_MODEL
-        self.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key, max_retries=2, timeout=60)
+        self.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key, max_retries=1, timeout=60)
 
     def complete(self, messages: list[dict], schema: dict) -> tuple[dict, float]:
         resp = self.client.chat.completions.create(
@@ -219,4 +250,4 @@ class OpenRouterChat:
         )
         usage = resp.usage
         cost = float((usage.model_extra or {}).get("cost") or 0.0) if usage else 0.0
-        return json.loads(resp.choices[0].message.content or "{}"), cost
+        return json.loads(resp.choices[0].message.content or "{}"), cost or FALLBACK_CALL_COST_USD
