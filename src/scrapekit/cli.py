@@ -3,6 +3,7 @@
     uv run scrapekit run <source>       # crawl + extract, the normal command
     uv run scrapekit crawl <source>     # only download
     uv run scrapekit extract <source>   # only re-extract from saved copies (no network)
+    uv run scrapekit ui                 # read-only data browser (needs `uv sync --extra ui`)
 """
 
 import argparse
@@ -95,6 +96,10 @@ def main() -> None:
     p_export.add_argument("--data-dir", type=Path, default=Settings.data_dir)
     p_export.add_argument("--out", type=Path, default=Path("export"))
 
+    p_ui = sub.add_parser("ui", help="Open the read-only data browser (needs `uv sync --extra ui`).")
+    p_ui.add_argument("--data-dir", type=Path, default=Settings.data_dir)
+    p_ui.add_argument("--port", type=int, default=8501)
+
     stage_help = {
         "run": "Crawl, then extract. The normal command.",
         "crawl": "Only download pages and files.",
@@ -138,6 +143,14 @@ def main() -> None:
         text = report(results, plan, args.out / ".work" / "data" / "scrapekit.db", source)
         (args.out / "REPORT.md").write_text(text)
         print(text)
+    elif args.command == "ui":
+        import subprocess
+        import sys
+
+        app = Path(__file__).parent / "ui" / "app.py"
+        env = dict(os.environ, SCRAPEKIT_UI_DB=str(replace(Settings(), data_dir=args.data_dir).db_path))
+        raise SystemExit(subprocess.call([sys.executable, "-m", "streamlit", "run", str(app), "--server.port",
+                                          str(args.port), "--browser.gatherUsageStats", "false"], env=env))
     elif args.command == "export":
         get_source(args.source)
         store = Store(connect(replace(Settings(), data_dir=args.data_dir).db_path), run_id="export")

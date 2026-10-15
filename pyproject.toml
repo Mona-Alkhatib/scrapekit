@@ -30,6 +30,11 @@ dev = [
 [project.scripts]
 scrapekit = "scrapekit.cli:main"
 
+[project.optional-dependencies]
+ui = [
+    "streamlit[pdf]>=1.66",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
