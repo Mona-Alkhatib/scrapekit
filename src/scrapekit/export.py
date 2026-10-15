@@ -6,6 +6,11 @@
     export/<source>/skips.jsonl      every skipped or failed link, with the reason
     export/<source>/runs.jsonl       metrics for every run
     export/<source>/SCHEMA.md        what each file and field means
+
+entities.jsonl is built by grouping the current facts (valid_to IS NULL) by entity, then adding
+linked files, best_date and the within_last_5_years flag. Each field keeps its own source
+(locator, excerpt, method, content_hash), so a downstream service can trace every value.
+JSON Lines because any language can stream it line by line, with no database driver.
 """
 
 import json
@@ -99,6 +104,7 @@ def export_source(store: Store, source: str, out_dir: Path) -> dict[str, int]:
         links_out[r["src"]].append(r["dst"])
         links_in[r["dst"]].append(r["src"])
 
+    # Pivot current facts into one object per entity: {"fields": {field: {value, locator, ...}}}.
     entities: dict[tuple, dict] = {}
     for r in conn.execute(
         "SELECT * FROM facts WHERE source = ? AND valid_to IS NULL ORDER BY entity_type, entity_key, field", (source,)

@@ -141,7 +141,8 @@ async def run_llm(
         if not pdf.PdfText(pages, {}).has_text_layer:
             continue  # scanned or unreadable, already logged by pass 1
         todo.append((doc["url"], doc["current_hash"], pages))
-    # Answers already in the cache are always re-used (free). The limit only counts paid calls.
+    # Cache: answers already stored for this content + model + prompt are re-used for free.
+    # The limit only counts paid calls.
     cached = [t for t in todo if store.llm_cache_get(t[1], llm.cache_key_suffix)]
     uncached = [t for t in todo if not store.llm_cache_get(t[1], llm.cache_key_suffix)]
     if limit is not None:
@@ -153,7 +154,7 @@ async def run_llm(
           f"about {tokens:,} input tokens, estimated {cost_text}; "
           f"run budget ${budget:.2f}")
     if dry_run:
-        return
+        return  # --llm-dry-run: print the estimate above, make no calls
 
     prompt = system_prompt(source.publisher, source.llm_focus)
     schema = response_schema(source.publisher_body_example)
@@ -164,6 +165,7 @@ async def run_llm(
         if cached:
             return url, content_hash, pages, json.loads(cached["response"]), None, None
         async with sem:
+            # Budget cap: stop paying once this run's real spend reaches --llm-budget (default $0.50).
             if stats.llm_cost_usd >= budget:
                 return url, content_hash, pages, None, None, BudgetReached(f"run budget ${budget:.2f} reached")
             try:
@@ -197,6 +199,7 @@ async def run_llm(
             stats.llm_cached += 1
             data = cached_data
 
+        # Hallucination guard: keep a fact only if its quote is really on the cited page.
         kept, dropped = verify_facts(data.get("facts") or [], pages)
         stats.llm_facts_kept += len(kept)
         stats.llm_facts_dropped += len(dropped)

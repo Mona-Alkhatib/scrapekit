@@ -6,6 +6,10 @@ can be read exactly, with no guessing and no AI.
 This module knows how Storyblok pages are shaped, but nothing about any one site. Each site
 describes its own content model (which CMS components become which entities, and which CMS
 fields map to which of our fields) in a `StoryblokModel`, set on its Source in `sources/`.
+
+Flow: extract() finds the __NEXT_DATA__ JSON, looks up the page's component in the model,
+and component_facts() turns each mapped field into a Fact whose locator is the JSON path
+it came from (e.g. "__NEXT_DATA__ page.content.ward"). No match: fall back to generic_html.
 """
 
 import json
@@ -88,7 +92,7 @@ def extract(url: str, html: bytes, model: StoryblokModel | None = None) -> list[
     props = data.get("props", {}).get("pageProps", {})
     page = props.get("page") or {}
     content = page.get("content") or {}
-    component = model.components.get(content.get("component"))
+    component = model.components.get(content.get("component"))  # e.g. "project", "article"
     if component is None:
         return generic_html.extract(url, html)  # pages the model does not describe: about, policies, listings
     return component_facts(component, page, content, props)
@@ -99,6 +103,7 @@ def component_facts(c: Component, page: dict, content: dict, props: dict) -> lis
     key = page.get("slug") or page.get("full_slug", "")
     facts = [Fact(kind, key, "url_slug", page.get("full_slug"), _loc("page.full_slug"))]
 
+    # Plain fields: one CMS field -> one fact, with the JSON path as the locator.
     for src, dst in c.fields.items():
         if not _blank(content.get(src)):
             facts.append(Fact(kind, key, dst, _clean(content[src]), _loc(f"page.content.{src}")))
@@ -109,6 +114,7 @@ def component_facts(c: Component, page: dict, content: dict, props: dict) -> lis
             # Older stories may keep the headline only in the CMS story name.
             facts.append(Fact(kind, key, dst, _clean(page["name"]), _loc("page.name")))
 
+    # Coded fields: translate codes to labels using lookup tables shipped in the same page.
     for src, (table, dst) in c.labels.items():
         value = content.get(src)
         if value:

@@ -6,6 +6,14 @@ Design rules:
 - Every fact must quote a short excerpt; we check that the excerpt really appears on the
   cited page and drop the fact if it does not (a cheap hallucination guard).
 - Results are cached by (content hash, model, prompt version), so unchanged files are never paid for twice.
+
+Where each part lives:
+- Prompt and JSON schema: PROMPT_TEMPLATE, response_schema() below. Site details come from the Source.
+- What is sent: build_document_text(), page-tagged text, start + end of long documents.
+- Hallucination guard: excerpt_on_page() and verify_facts().
+- The API call and real cost: OpenRouterExtractor.extract().
+- Cache, budget cap, dry run, concurrency: extract_stage.py, run_llm().
+Only PDFs go to the LLM. Pages are read exactly from their embedded JSON, for free.
 """
 
 import json
@@ -208,6 +216,7 @@ class OpenRouterExtractor:
 
     @property
     def cache_key_suffix(self) -> str:
+        # Cache key = content hash (in the db) + this. Same file, model and prompt -> no new call.
         """Identifies a paid answer. Changing the model or prompt means a new paid call."""
         return f"{self.model}|v{PROMPT_VERSION}"
 
@@ -215,11 +224,12 @@ class OpenRouterExtractor:
         text, truncated, pages_sent = build_document_text(pages)
         resp = await self.client.chat.completions.create(
             model=self.model,
-            temperature=0,
+            temperature=0,  # same input, same answer as far as possible
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": f"Source URL: {url}\n\n{text}"},
             ],
+            # Strict JSON schema: the reply must match the schema, so no free-text parsing.
             response_format={"type": "json_schema", "json_schema": schema},
             extra_body={"usage": {"include": True}},  # OpenRouter then returns the real cost
         )

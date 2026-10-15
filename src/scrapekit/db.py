@@ -1,4 +1,18 @@
-"""SQLite storage: what we fetched, every distinct version of it, and what we skipped."""
+"""SQLite storage: what we fetched, every distinct version of it, and what we skipped.
+
+The tables, in the order a run fills them:
+- runs         one row per run, with its metrics (stats_json)
+- documents    one row per URL: kind, host, last status, ETag, current content hash
+- snapshots    one row per distinct version of a URL; the raw bytes are in data/raw (blobs.py)
+- skips        every skipped or failed URL with a reason
+- links        which page links to which file
+- extractions  which (url, content hash, extractor version) is done, so re-runs skip it
+- facts        one row per field of one entity, with source, locator, excerpt and history
+- pdf_pages    PDF text per page, for the LLM and for checking its quotes
+- llm_cache    paid LLM answers, so the same content is never paid for twice
+
+History rule: facts are never overwritten. See apply_facts().
+"""
 
 import sqlite3
 from collections import Counter
@@ -261,6 +275,8 @@ class Store:
             (content_hash, model_key, response, tokens_in, tokens_out, cost, utcnow()),
         )
 
+    # The history logic. For a changed value it inserts a new row, then closes the old one
+    # (valid_to = now, superseded_by = new id), so every correction keeps its previous value.
     def apply_facts(self, source: str, url: str, content_hash: str, facts: list, method: str = "parse") -> Counter:
         """Compares new facts from one document with the current ones and records the difference.
 

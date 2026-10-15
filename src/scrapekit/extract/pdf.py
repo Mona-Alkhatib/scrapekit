@@ -1,4 +1,9 @@
-"""PDF text per page, plus basic facts that need no AI (title, page count, metadata dates)."""
+"""PDF text per page, plus basic facts that need no AI (title, page count, metadata dates).
+
+read_pdf() keeps the text page by page. extract_stage.py saves those pages in the `pdf_pages`
+table, so the LLM can be told "[page N]" and every LLM fact can be checked against its page.
+A PDF with almost no text on any page is a scan: it is saved and logged (no_text_layer), not parsed.
+"""
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -24,6 +29,7 @@ class PdfText:
 def read_pdf(data: bytes) -> PdfText:
     try:
         with pymupdf.open(stream=data, filetype="pdf") as doc:
+            # One string per page; page numbers are 1-based from here on, as a person would cite them.
             return PdfText(pages=[page.get_text() for page in doc], metadata=dict(doc.metadata or {}))
     except Exception as exc:  # pymupdf raises several types for broken files
         raise ExtractionError(f"pdf open failed: {type(exc).__name__}: {exc}") from exc

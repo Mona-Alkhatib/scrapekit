@@ -1,4 +1,17 @@
-"""The crawl loop for any Source: seed from sitemaps, walk the crawl hosts, download linked files, log every skip."""
+"""The crawl loop for any Source: seed from sitemaps, walk the crawl hosts, download linked files, log every skip.
+
+How a crawl runs:
+1. run(): put the start URLs and every sitemap URL on a queue.
+2. A few workers (settings.workers) take URLs off the queue in parallel. The fetcher still
+   allows only 1 request per second per host, so parallel workers never hammer one site.
+3. process() handles one URL: robots.txt check, skip-if-immutable, conditional GET,
+   save the raw copy, and for HTML pages, follow_links().
+4. follow_links() classifies every link: a page on a crawl host or a file goes back on the
+   queue; anything else (off-domain, mailto:, excluded path) goes to skip() with a reason.
+5. skip() writes every skipped or failed URL to the `skips` table. Nothing is dropped silently.
+
+This file only downloads. Turning saved copies into facts happens later, in extract_stage.py.
+"""
 
 import asyncio
 import logging
@@ -46,11 +59,13 @@ class Crawler:
     # ---------- public ----------
 
     async def run(self) -> None:
+        # Seed: start URLs plus the sitemap. Link walking (follow_links) finds pages the sitemap misses.
         for start in self.source.start_urls:
             self.enqueue(normalize(start, start), "page", None)
         for url in await self.sitemap_urls():
             self.enqueue(url, "page", "sitemap")
 
+        # Workers run until the queue is empty and every job is marked done.
         workers = [asyncio.create_task(self.worker()) for _ in range(self.settings.workers)]
         await self.queue.join()
         for w in workers:
@@ -60,6 +75,7 @@ class Crawler:
     # ---------- queue ----------
 
     def enqueue(self, url: str, kind: str, found_on: str | None) -> None:
+        # Each URL is queued once per run, however many pages link to it.
         if url in self.seen:
             return
         self.seen.add(url)
@@ -83,6 +99,8 @@ class Crawler:
                 self.queue.task_done()
 
     def skip(self, url: str, reason: str, detail: str | None = None) -> None:
+        """The skip log: one row per URL per run, with a reason code and a detail
+        (usually the page the link was found on). Also counted in the run report."""
         if url in self.skipped:
             return
         self.skipped.add(url)
@@ -126,6 +144,7 @@ class Crawler:
     # ---------- one URL ----------
 
     async def process(self, job: Job) -> None:
+        # 1. Public content only: respect robots.txt on every host, including file hosts.
         if not await self.allowed(job.url):
             self.skip(job.url, "robots_disallowed")
             return
@@ -135,17 +154,20 @@ class Crawler:
         if job.found_on and job.found_on != "sitemap":
             self.store.add_link(job.found_on, job.url)
 
+        # 2. What do we already have? The saved copy and its ETag drive the cheap repeat run.
         previous = self.store.get_document(job.url)
         prev_hash = previous["current_hash"] if previous else None
         prev_path = self.store.latest_snapshot_path(job.url) if prev_hash else None
         have_copy = prev_path is not None and Path(prev_path).exists()
 
+        # 3. Immutable file URLs (from the Source config): no request at all on repeat runs.
         if have_copy and job.kind == "file" and self.is_immutable(job.url) and not self.settings.revalidate_all:
             # A new version of this file would get a new URL, so the saved copy is still current.
             self.count(job.kind, "unchanged")
             self.stats.files_not_rechecked += 1
             return
 
+        # 4. Conditional GET: send the saved ETag; an unchanged page answers 304 with no body.
         result = await self.fetcher.fetch(
             job.url,
             etag=previous["etag"] if have_copy else None,
@@ -153,10 +175,12 @@ class Crawler:
         )
 
         if result.not_modified:
+            # 5a. Unchanged: reuse the saved copy (still needed to find links on this page).
             self.store.record_fetch(job.url, 304, None, None, None, None)
             self.count(job.kind, "unchanged")
             body, content_type = Path(prev_path).read_bytes(), previous["content_type"]
         else:
+            # 5b. New or changed: log failures, else save the raw copy by hash and add a snapshot row.
             body = self.handle_failure(job, result)
             if body is None:
                 return
@@ -170,6 +194,7 @@ class Crawler:
             if prev_hash:
                 self.count(job.kind, "unchanged" if prev_hash == digest else "changed")
 
+        # 6. Pages only: queue the links they contain.
         if job.kind == "page" and "html" in (content_type or ""):
             self.follow_links(job.url, body)
 
@@ -193,12 +218,13 @@ class Crawler:
         setattr(self.stats, name, getattr(self.stats, name) + 1)
 
     def follow_links(self, page_url: str, html: bytes) -> None:
+        # Links come from <a href> and from JSON embedded in the page (links.py).
         links, rejected = extract_links(html, page_url, self.source)
         for href in rejected:
             self.skip(href, "non_http_link", page_url)  # mailto:, tel:, etc.
         for url in sorted(links):
             url = canonicalize(url, self.source)
-            kind, reason = classify(url, self.source)
+            kind, reason = classify(url, self.source)  # 'page', 'file', or None with a skip reason
             if kind:
                 self.enqueue(url, kind, page_url)
             else:

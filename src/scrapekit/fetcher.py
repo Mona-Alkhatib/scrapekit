@@ -1,4 +1,14 @@
-"""Polite HTTP client: one request per second per host, retries with backoff, conditional GETs."""
+"""Polite HTTP client: one request per second per host, retries with backoff, conditional GETs.
+
+Every request in a run goes through Fetcher.fetch(), so the politeness rules live in one place:
+- HostThrottle: at least 1 second between two requests to the same host (settings).
+- Conditional GET: send the saved ETag / Last-Modified; the server answers 304 if nothing changed.
+- Retries: 429 and 5xx are retried with backoff (1s, 2s, 4s), honoring Retry-After.
+- Size cap: downloads are streamed and stopped at 50 MB (settings.max_file_bytes).
+- Every request is counted in the run report (requests, status codes, bytes).
+
+robots.txt is not handled here: the crawler fetches it once per host (crawler.py, allowed()).
+"""
 
 import asyncio
 import time
@@ -39,6 +49,7 @@ class HostThrottle:
         self._last: dict[str, float] = {}
 
     async def wait(self, host: str) -> None:
+        # One lock per host: workers on the same host wait in turn, other hosts are not slowed.
         lock = self._locks.setdefault(host, asyncio.Lock())
         async with lock:
             gap = self.interval - (time.monotonic() - self._last.get(host, 0.0))
@@ -63,6 +74,7 @@ class Fetcher:
         await self.client.aclose()
 
     async def fetch(self, url: str, etag: str | None = None, last_modified: str | None = None) -> FetchResult:
+        # Conditional GET headers, from the previous run's response.
         headers = {}
         if etag:
             headers["If-None-Match"] = etag
@@ -81,6 +93,7 @@ class Fetcher:
                 last_error = f"{type(exc).__name__}: {exc}"
             else:
                 self.stats.status_counts[result.status] += 1
+                # Success, 304, 404 etc. return right away; only 429 / 5xx are retried.
                 if result.status not in RETRY_STATUSES or attempt == self.settings.max_retries:
                     return result
                 last_error = f"HTTP {result.status}"
@@ -88,7 +101,7 @@ class Fetcher:
                 if retry_after.isdigit():
                     await asyncio.sleep(min(int(retry_after), 60))
                     continue
-            await asyncio.sleep(2**attempt)
+            await asyncio.sleep(2**attempt)  # exponential backoff: 1s, 2s, 4s
         return FetchResult(url=url, status=0, error=last_error)
 
     async def _get(self, url: str, headers: dict) -> FetchResult:
@@ -97,6 +110,7 @@ class Fetcher:
             if resp.status_code != 200:
                 return FetchResult(url=url, status=resp.status_code, headers=resp_headers)
 
+            # Size cap: check the declared size first, then count bytes while streaming.
             declared = int(resp_headers.get("content-length") or 0)
             if declared > self.settings.max_file_bytes:
                 return FetchResult(url=url, status=200, headers=resp_headers, error=f"too_large:{declared}")
