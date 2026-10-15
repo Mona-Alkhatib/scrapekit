@@ -72,6 +72,31 @@ CREATETO = Source(
         "Prefer facts a researcher tracking city land and development would want: property addresses, project names,\n"
         "board or committee decisions, dollar amounts, key dates, and project phases."
     ),
+    field_docs={
+        "project.name": "Project name as shown on the site.",
+        "project.summary": "Short description of the project from the CMS.",
+        "project.address": "Street address of the site.",
+        "project.ward": "City of Toronto ward the site is in.",
+        "project.councillor": "Ward councillor named on the project page.",
+        "project.major_intersection": "Nearest major intersection.",
+        "project.site_area": "Size of the site, as written on the page (units vary).",
+        "project.current_use": "What the site is used for today.",
+        "project.proposed_use": "What the site is planned to become.",
+        "project.surrounding_use": "What is around the site.",
+        "project.delivery": "How the project is delivered (e.g. partner or program), as written on the page.",
+        "project.phase": "Current project phase (Pre-development, Development Concept, Market Offering, Leasing, "
+                         "Delivery and Construction, Completed ...), translated from the CMS code.",
+        "project.types": "Project types (e.g. housing, office), translated from CMS codes.",
+        "project.timeline": "The project's phases in order, each {phase, schedule, active}.",
+        "project.initiatives": "City programs the project belongs to, e.g. Housing Now.",
+        "news.title": "Headline of the news item or meeting notice.",
+        "news.event_starts_at": "Start of the event, for meetings and consultations.",
+        "news.event_ends_at": "End of the event.",
+        "news.external_url": "Link to the original article when the item points to another site.",
+        "news.external_source": "Name of that other site, e.g. a newspaper.",
+        "news.topics": "Topic tags from the CMS.",
+        "news.related_projects": "Projects this item is about (their slugs), to join news to projects.",
+    },
     # Storyblok asset URLs contain a unique id per upload (/f/<space>/<size>/<id>/<name>).
     immutable_url_patterns=(r"^https://a-us\.storyblok\.com/f/\d+/[^/]+/[0-9a-f]{10}/",),
     notes=(

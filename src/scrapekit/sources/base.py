@@ -1,6 +1,6 @@
 """A Source describes one website. Adding a new site means writing one of these, not changing the crawler."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 DEFAULT_FILE_EXTENSIONS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".ppt", ".pptx")
@@ -27,5 +27,7 @@ class Source:
     publisher: str = "a public organization"
     publisher_body_example: str = "Board of Directors"  # example of an issuing body, for the LLM schema
     llm_focus: str | None = None  # which facts matter for this site, in the LLM prompt; None = a generic default
+    # What this site's own fields mean ("entity_type.field" -> text), shown in the UI's data dictionary.
+    field_docs: dict[str, str] = field(default_factory=dict)
     notes: str = ""  # what we learned about the site, shown by `scrapekit sources`
     tags: tuple[str, ...] = ()

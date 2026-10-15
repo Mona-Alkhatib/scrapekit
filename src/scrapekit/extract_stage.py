@@ -21,6 +21,16 @@ from .sources import Source
 
 log = logging.getLogger(__name__)
 
+# What the LLM fields mean, shown in the UI's data dictionary. All come from PDFs only.
+FIELD_DOCS = {
+    "document.llm_doc_type": "Kind of document chosen by the model from a fixed list (board_minutes, staff_report, notice ...).",
+    "document.llm_title": "Title as the model read it from the text.",
+    "document.llm_document_date": "Date stated in the document text (YYYY-MM-DD), usually the meeting or report date.",
+    "document.llm_organization": "The body that issued the document, e.g. a board or committee.",
+    "document.llm_summary": "One or two plain sentences on what the document is about.",
+    "document.llm_key_facts": "Up to 15 facts, each {kind, value, page, excerpt}. Kept only if the excerpt is really on that page.",
+}
+
 # Bump a version when its extractor's output changes, so old content is re-extracted once.
 EXTRACTOR_VERSIONS = {"generic": 1, "storyblok": 2, "pdf": 1}
 

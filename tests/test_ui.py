@@ -153,7 +153,7 @@ def test_find_excerpt_loose():
     assert q.find_excerpt(text, "nothing like this") is None
 
 
-PAGES = ["overview", "runs", "skips", "entities", "documents", "facts"]
+PAGES = ["overview", "runs", "skips", "entities", "documents", "facts", "dictionary"]
 UI = Path(__file__).parent.parent / "src" / "scrapekit" / "ui"
 
 
@@ -309,3 +309,33 @@ def test_overview_charts_data(conn):
     assert q.locations(conn, "demo") == [{"entity_type": "project", "entity_key": "alpha", "name": "Alpha Site",
                                           "lat": 43.65, "lon": -79.38}]
 
+
+
+def test_every_field_the_createto_config_produces_is_documented():
+    from scrapekit.extract import field_docs
+    from scrapekit.sources import CREATETO
+
+    docs = field_docs(CREATETO)
+    model = CREATETO.extractor_options
+    produced = set()
+    for kind, c in ((c.entity_type, c) for c in model.components.values()):
+        produced |= {f"{kind}.{f}" for f in c.fields.values()}
+        produced |= {f"{kind}.{dst}" for _, dst in c.labels.values()}
+        produced |= {f"{kind}.{f}" for f in (*c.name_lists.values(), *c.ref_lists.values())}
+        produced |= {f"{kind}.{o.field}" for o in c.object_lists.values()}
+        produced |= {f"{kind}.{f}" for f in ("url_slug", "first_published_at", "cms_updated_at", "body_text")}
+        if c.location:
+            produced.add(f"{kind}.location")
+    produced |= {f"document.{f}" for f in ("file_name_title", "page_count", "has_text_layer", "pdf_title", "pdf_created",
+                                           "pdf_modified", "first_page_excerpt", "llm_doc_type", "llm_title",
+                                           "llm_document_date", "llm_organization", "llm_summary", "llm_key_facts")}
+    produced |= {f"page.{f}" for f in ("title", "description", "headings", "text")}
+    missing = [k for k in sorted(produced) if k not in docs and k.split(".", 1)[1] not in docs]
+    assert missing == []
+
+
+def test_field_stats(conn):
+    stats = {(s["entity_type"], s["field"]): s for s in q.field_stats(conn, "demo")}
+    phase = stats[("project", "phase")]
+    assert (phase["entities"], phase["coverage"], phase["method"]) == (1, 1.0, "parse")
+    assert phase["example"] == "Construction" and phase["locator"] == "json phase"

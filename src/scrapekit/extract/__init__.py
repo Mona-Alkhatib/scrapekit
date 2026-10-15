@@ -34,6 +34,23 @@ class ExtractionError(Exception):
 PageExtractor = Callable[[str, bytes, object], list[Fact]]  # (url, html, the source's extractor_options)
 
 
+def field_docs(source) -> dict[str, str]:
+    """What each field means: generic descriptions from the extractors, then the source's own (which win).
+    Keys are "entity_type.field" or just "field" when the meaning is the same for every entity type."""
+    from .. import extract_stage
+    from . import generic_html, pdf, storyblok
+
+    docs: dict[str, str] = {}
+    for part in (storyblok.FIELD_DOCS, generic_html.FIELD_DOCS, pdf.FIELD_DOCS, extract_stage.FIELD_DOCS,
+                 getattr(source, "field_docs", None) or {}):
+        docs.update(part)
+    return docs
+
+
+def describe(docs: dict[str, str], entity_type: str, field: str) -> str | None:
+    return docs.get(f"{entity_type}.{field}") or docs.get(field)
+
+
 def get_page_extractor(name: str) -> PageExtractor:
     from . import generic_html, storyblok
 

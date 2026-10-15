@@ -15,6 +15,17 @@ from . import ExtractionError, Fact
 
 MIN_TEXT_CHARS_PER_PAGE = 20  # below this on every page, the PDF is probably a scan
 
+# What each field means, shown in the UI's data dictionary.
+FIELD_DOCS = {
+    "document.file_name_title": "A readable title made from the file name (dashes and underscores become spaces).",
+    "document.page_count": "Number of pages in the PDF.",
+    "document.has_text_layer": "true if the PDF has selectable text. false means a scanned image: saved, but not parsed.",
+    "document.pdf_title": "The title stored in the PDF's metadata, if the author set one.",
+    "document.pdf_created": "Creation date from the PDF's metadata (YYYY-MM-DD). Often the export date, not the meeting date.",
+    "document.pdf_modified": "Last-modified date from the PDF's metadata (YYYY-MM-DD).",
+    "document.first_page_excerpt": "The first 300 characters of page 1, a quick preview of what the document is.",
+}
+
 
 @dataclass
 class PdfText:

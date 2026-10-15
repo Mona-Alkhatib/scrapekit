@@ -18,6 +18,15 @@ from dataclasses import dataclass, field
 
 from . import ExtractionError, Fact, generic_html
 
+# Fields every Storyblok-backed entity gets, whatever the site. Site-specific fields are documented in the Source.
+FIELD_DOCS = {
+    "url_slug": "Path of the page on the site, e.g. projects/parkdale-hub. Joins a page to its entity.",
+    "first_published_at": "When the CMS story was first published (UTC). The best date for news items and projects.",
+    "cms_updated_at": "When the CMS story was last edited (UTC). Changes even for small edits.",
+    "body_text": "The page's main rich text, flattened to plain text.",
+    "location": "Latitude and longitude as {lat, lon}, from the CMS fields named in the site's model.",
+}
+
 NEXT_DATA_RE = re.compile(rb'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
 
 

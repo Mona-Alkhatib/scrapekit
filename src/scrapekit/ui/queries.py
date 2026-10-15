@@ -330,3 +330,24 @@ def locations(conn, source: str) -> list[dict]:
                                   json_extract(f.value, '$.lat') AS lat, json_extract(f.value, '$.lon') AS lon
                            FROM facts f WHERE f.source = ? AND f.field = 'location' AND f.valid_to IS NULL
                              AND json_extract(f.value, '$.lat') IS NOT NULL ORDER BY f.entity_key""", (source,))
+
+
+# ---------- data dictionary ----------
+
+def field_stats(conn, source: str) -> list[dict]:
+    """Every field per entity type and method: how many entities have it, share of all entities of that type,
+    and one example value with its locator."""
+    rows = _rows(conn, """
+        WITH cur AS (SELECT * FROM facts WHERE source = ? AND valid_to IS NULL),
+             agg AS (SELECT entity_type, field, method, COUNT(DISTINCT entity_key) AS entities, MIN(id) AS first_id
+                     FROM cur GROUP BY entity_type, field, method),
+             tot AS (SELECT entity_type, COUNT(DISTINCT entity_key) AS n FROM cur GROUP BY entity_type)
+        SELECT a.entity_type, a.field, a.method, a.entities, ROUND(a.entities * 1.0 / t.n, 3) AS coverage,
+               f.value AS example, f.locator
+        FROM agg a JOIN tot t ON t.entity_type = a.entity_type JOIN facts f ON f.id = a.first_id
+        ORDER BY a.entity_type, a.method DESC, a.field""", (source,))
+    for r in rows:
+        value = json.loads(r["example"])
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        r["example"] = text if len(text) <= 120 else text[:117] + "..."
+    return rows

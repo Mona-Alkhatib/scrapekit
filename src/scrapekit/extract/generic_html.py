@@ -8,6 +8,14 @@ from . import ExtractionError, Fact
 
 MAX_TEXT_CHARS = 20_000
 
+# What each field means, shown in the UI's data dictionary.
+FIELD_DOCS = {
+    "page.title": "The page's <title> tag.",
+    "page.description": "The page's meta description, a one-line summary written by the site.",
+    "page.headings": "The page's h1 and h2 headings, in order (up to 30).",
+    "page.text": "Main readable text of the page (inside <main>, without menus and footers), up to 20,000 characters.",
+}
+
 
 def page_key(url: str) -> str:
     return urlparse(url).path.strip("/") or "home"
