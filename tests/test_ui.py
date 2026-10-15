@@ -153,7 +153,7 @@ def test_find_excerpt_loose():
     assert q.find_excerpt(text, "nothing like this") is None
 
 
-PAGES = ["overview", "runs", "skips", "entities", "documents", "facts", "dictionary"]
+PAGES = ["overview", "runs", "skips", "entities", "documents", "facts", "dictionary", "ask"]
 UI = Path(__file__).parent.parent / "src" / "scrapekit" / "ui"
 
 

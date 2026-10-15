@@ -33,5 +33,6 @@ nav = st.navigation([
     st.Page(views / "documents.py", title="Pages & files", icon=":material/description:"),
     st.Page(views / "skips.py", title="Skip log", icon=":material/block:"),
     st.Page(views / "dictionary.py", title="Data dictionary", icon=":material/menu_book:"),
+    st.Page(views / "ask.py", title="Ask AI", icon=":material/chat:"),
 ])
 nav.run()
