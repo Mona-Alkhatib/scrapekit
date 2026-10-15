@@ -51,8 +51,8 @@ flowchart LR
     E --> F[(snapshots table<br/>one row per version)]
     D -- HTML page --> G[Link finder]
     G --> B
-    F --> H[Extractors<br/>round 2 and 3]
-    H --> I[(records table<br/>with source + history)]
+    F --> H[Extractors<br/>rules, then LLM for PDFs]
+    H --> I[(facts table<br/>with source + history)]
     I --> J[export/*.jsonl]
 ```
 
@@ -63,19 +63,23 @@ flowchart LR
 Everything that is specific to a website lives in a `Source` object in `src/scrapekit/sources/`. The crawler only reads it.
 
 ```python
-CREATETO = Source(
+CREATETO = Source(                                   # abridged; see sources/createto.py
     name="createto",
     start_urls=("https://createto.ca/",),
     crawl_hosts=("createto.ca", "www.createto.ca"),
     sitemap_urls=("https://createto.ca/sitemap.xml",),
     excluded_path_prefixes=("/system/", "/search"),
+    page_extractor="storyblok",
+    extractor_options=CREATETO_MODEL,                # the site's CMS content model
+    publisher="CreateTO, the City of Toronto's real estate agency",   # used in the LLM prompt
+    ...
 )
 ```
 
 To add a new website:
 1. Create `sources/<name>.py` with a `Source`.
 2. Add it to the list in `sources/__init__.py`.
-3. Run `uv run scrapekit crawl <name>`.
+3. Run `uv run scrapekit run <name>`.
 
 What a Source can say about its website:
 
@@ -134,15 +138,15 @@ Storing one row per field (instead of one wide row per project) makes history si
 | `generic` | Any HTML page, and static pages on createto.ca | Title, meta description, headings, main text. Works on any site. |
 | `pdf` (pass 1) | Every linked PDF | Text of each page (saved with 1-based page numbers for citing), page count, PDF metadata dates, first page excerpt. Scanned PDFs with no text are logged as `no_text_layer`. |
 
-A source picks its page extractor in its config (`page_extractor="storyblok"`). The fallback is `generic`.
+A source picks its page extractor in its config (`page_extractor="storyblok"`) and passes the site's content model in `extractor_options`. Pages the model does not describe, and sites with no settings, use `generic`.
 
 ### Fields we keep and why
 
 | Entity | Fields | Why they are useful later |
 |---|---|---|
-| project | name, phase, timeline (phase + schedule), ward, councillor, address, major intersection, location (lat/lon), site area, current / proposed / surrounding use, types, initiatives, summary, body text, published and CMS updated dates | Answers "what is CreateTO doing, where, and at what stage", and lets you track phase changes over time |
+| project | name, phase, timeline (phase, schedule, active step), ward, councillor, address, major intersection, location (lat/lon), site area, current / proposed / surrounding use, types, initiatives, summary, body text, published and CMS updated dates | Answers "what is CreateTO doing, where, and at what stage", and lets you track phase changes over time |
 | news | title, published date, topics (e.g. board meetings), related projects, event dates, external link, body text | Board and committee meetings and announcements are where decisions show up first; dates let consumers filter to the last 5 years |
-| document | title (from file name and PDF metadata), page count, created / modified dates, first page excerpt, page text | Agendas, minutes and reports are the deepest source; page text enables cited facts in round 3 |
+| document | title (from file name and PDF metadata), page count, created / modified dates, first page excerpt, page text | Agendas, minutes and reports are the deepest source; page text is what the LLM pass (below) reads and cites |
 | page | title, description, headings, text | Context pages (about, policies, strategic plan) |
 
 ### History: corrections and amendments
@@ -263,7 +267,7 @@ erDiagram
 
 - **documents**: one row per URL we know (page or file), tagged with its source, with the latest status, ETag and hash.
 - **snapshots**: one row per *distinct version* of a URL. Same content again does not add a row. A new row means the source changed, and the old version is still on disk. This is our history of the raw source.
-- **skips**: every link we did not use, with a reason: `off_domain`, `excluded_path`, `robots_disallowed`, `http_404`, `network_error`, `too_large`, `non_http_link`, `max_pages`.
+- **skips**: every link we did not use, or used and could not process, with a reason. Crawl: `off_domain`, `excluded_path`, `robots_disallowed`, `http_<code>` (404, 403, ...), `network_error`, `too_large`, `non_http_link`, `max_pages`, `not_in_allowlist`. Extraction: `parse_error`, `no_text_layer` (scanned PDF), `llm_error`, `llm_budget_reached`.
 - **links**: which page linked to which URL, so every file can be traced back to the page that mentioned it.
 - **facts**: one row per field of one entity, with source, locator and validity dates (section 6).
 - **extractions**: which document versions were already extracted, and any failures.
@@ -277,7 +281,9 @@ erDiagram
 flowchart TD
     A[URL] --> B{We have a saved copy?}
     B -- no --> F[Normal GET]
-    B -- yes --> C[GET with If-None-Match]
+    B -- yes --> I{File URL the source marks immutable?}
+    I -- yes --> U0[Unchanged: no request at all]
+    I -- no --> C[GET with If-None-Match]
     C -- 304 --> U[Unchanged: reuse saved copy, no download]
     C -- 200 --> H{Same SHA-256 as before?}
     F --> N[New: save snapshot]
@@ -287,11 +293,13 @@ flowchart TD
 
 "Unchanged" means no new snapshot, so the extraction step (and any paid AI call) is skipped for it.
 
+Measured on the live site: the unchanged repeat made 299 requests instead of 738 (440 files not re-checked, 274 answers were `304`), downloaded 49 MB instead of 990 MB, re-extracted nothing, and made 0 paid calls. See the README results table.
+
 ## 9. Being polite (not DDoS-ing the site)
 
 - At most 1 request per second **per host**, no matter how many workers run.
 - A clear `User-Agent` that says what we are.
-- robots.txt is read for every host before fetching from it.
+- robots.txt is read once per host per run, before fetching anything from that host, and its rules are followed.
 - Retries back off (1s, 2s, 4s) and respect `Retry-After`.
 - Conditional GETs mean a repeat run downloads almost nothing.
 
@@ -303,10 +311,10 @@ flowchart TD
 | Plain async Python (`httpx`) instead of Scrapy | Small, easy to read and explain, enough for ~250 pages | Scrapy's built-in middleware ecosystem |
 | No headless browser | Pages are server-rendered | Would need Playwright if the site moved to client-side rendering |
 | SQLite + files on disk | Zero setup, one file to hand over, easy to query | Not built for many writers at once (Postgres would be the next step) |
-| One row per fact, not one wide row per project | Each field keeps its own source and history; works for any entity type and any site | Consumers need a pivot to get one row per project (the export in round 4 does this) |
+| One row per fact, not one wide row per project | Each field keeps its own source and history; works for any entity type and any site | Consumers need a pivot to get one row per project (the export's `entities.jsonl` does this) |
 | Rules first, AI only for PDFs | Exact, free and testable where the data is structured | Free text inside pages is not mined for facts yet |
 | Hash raw bytes for change detection | Exact and simple | Next.js pages may change bytes on every deploy without real content changes. Fact-level comparison handles this: a cosmetic change re-runs the cheap parser, but no fact changes and no AI call is made. |
-| Do not re-check files with immutable URLs (Storyblok gives every upload a new URL) | Repeat runs skip about 470 requests, so they are several times faster and lighter on the hosts | A file deleted or corrupted in place would not be noticed until a full re-check. Mitigation: schedule `--revalidate-all` periodically (for example weekly). The variant demo uses it so file failures are visible. |
+| Do not re-check files with immutable URLs (Storyblok gives every upload a new URL) | The live repeat run skipped 440 requests and took 4.6 minutes instead of 14 | A file deleted or corrupted in place would not be noticed until a full re-check. Mitigation: schedule `--revalidate-all` periodically (for example weekly). The variant demo uses it so file failures are visible. |
 
 ## 11. Build rounds
 

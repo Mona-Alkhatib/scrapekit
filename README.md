@@ -5,11 +5,12 @@ A small, polite crawler that turns public websites and the files they link to in
 The first source is [CreateTO](https://createto.ca). Each website is described by one small `Source` config, so adding another site does not change the crawler.
 
 - Crawls every public page on a site (sitemap + link walk).
-- Downloads every linked file (PDF, Word, Excel), including files hosted on other sites.
+- Downloads every linked file (PDF, Word, Excel), including files hosted on other sites. PDFs are parsed (text by page, plus LLM facts with citations); Word and Excel files are saved but not parsed yet.
 - Saves a raw copy of every page and file, with one snapshot per version, so changes over time are kept.
 - Logs every skipped or failed link with a reason.
 - Writes a metrics report for every run (time, requests, files, records, paid calls, cost).
-- Repeat runs use conditional requests, so unchanged pages are not downloaded or processed again.
+- Repeat runs use conditional requests and skip files whose URL never changes, so unchanged content is not downloaded or processed again.
+- Everything site-specific lives in one config file per website; a test keeps site names out of the rest of the code.
 
 How it works: see [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -104,7 +105,7 @@ Each run prints a summary and writes:
 
 | Output | What it is |
 |---|---|
-| `data/scrapekit.db` | SQLite: documents, snapshots, facts (with history), pdf_pages, skips, links, runs |
+| `data/scrapekit.db` | SQLite: documents, snapshots, facts (with history), extractions, llm_cache, pdf_pages, skips, links, runs |
 | `data/raw/` | Raw copies of pages and files, named by SHA-256 |
 | `runs/<run_id>.md` / `.json` | Metrics for that run |
 
@@ -114,7 +115,7 @@ Each run prints a summary and writes:
 uv run scrapekit export createto     # writes export/createto/*.jsonl and SCHEMA.md
 ```
 
-`entities.jsonl` has one line per project, news item, document or page with current values and where each came from. `facts.jsonl` has the full history. See `export/createto/SCHEMA.md`.
+`entities.jsonl` has one line per project, news item, document or page with current values and where each came from, plus `best_date` and a `within_last_5_years` flag. `facts.jsonl` has the full history. See `export/createto/SCHEMA.md`.
 
 ## Variant runs (unchanged, changed source, failed file)
 
@@ -140,7 +141,7 @@ With no extractor settings, pages use the generic extractor (title, description,
 uv run pytest
 ```
 
-Tests run against a fake site, with no network access.
+Tests run against a fake site and a fake LLM, with no network access and no cost. They include a guard that fails if a website name appears in code outside `sources/`.
 
 ## Status
 
