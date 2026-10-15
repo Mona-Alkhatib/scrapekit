@@ -37,6 +37,8 @@ def db(tmp_path) -> Path:
     s1.add_skip("https://example.org/gone.pdf", "http_404", PAGE)
     s1.apply_facts("demo", PAGE, "h_page1", [
         Fact("project", "alpha", "name", "Alpha Site", "json name"),
+        Fact("project", "alpha", "location", {"lat": 43.65, "lon": -79.38}, "json lat/lon"),
+        Fact("project", "alpha", "first_published_at", "2024-05-01T10:00:00Z", "page.first_published_at"),
         Fact("project", "alpha", "phase", "Planning", "json phase"),
     ])
     s1.save_pdf_pages("h_pdf", ["Cover page", "The board approved   $2.5 million for Alpha."])
@@ -52,6 +54,8 @@ def db(tmp_path) -> Path:
     s2.start_run("demo", "crawl+extract")
     s2.apply_facts("demo", PAGE, "h_page2", [
         Fact("project", "alpha", "name", "Alpha Site", "json name"),
+        Fact("project", "alpha", "location", {"lat": 43.65, "lon": -79.38}, "json lat/lon"),
+        Fact("project", "alpha", "first_published_at", "2024-05-01T10:00:00Z", "page.first_published_at"),
         Fact("project", "alpha", "phase", "Construction", "json phase"),
     ])
     s2.finish_run(json.dumps({"requests": 3, "status_counts": {"304": 3}, "skips": {}}))
@@ -108,7 +112,8 @@ def test_entities_and_history(conn):
     assert ents[0]["entity_key"] == "alpha" and ents[0]["name"] == "Alpha Site"
     assert q.entities(conn, "demo", search="constr")[0]["entity_key"] == "alpha"
     current = {f["field"]: json.loads(f["value"]) for f in q.entity_facts(conn, "demo", "project", "alpha")}
-    assert current == {"name": "Alpha Site", "phase": "Construction"}
+    assert current == {"name": "Alpha Site", "phase": "Construction", "location": {"lat": 43.65, "lon": -79.38},
+                       "first_published_at": "2024-05-01T10:00:00Z"}
     phase_now = [f for f in q.entity_facts(conn, "demo", "project", "alpha") if f["field"] == "phase"][0]
     chain = q.fact_history(conn, phase_now["id"])
     assert [json.loads(f["value"]) for f in chain] == ["Planning", "Construction"]
@@ -148,7 +153,7 @@ def test_find_excerpt_loose():
     assert q.find_excerpt(text, "nothing like this") is None
 
 
-PAGES = ["runs", "skips", "entities", "documents", "facts"]
+PAGES = ["overview", "runs", "skips", "entities", "documents", "facts"]
 UI = Path(__file__).parent.parent / "src" / "scrapekit" / "ui"
 
 
@@ -266,7 +271,11 @@ def test_removed_facts_are_not_blamed_on_a_crashed_run(db):
     rw = connect(db)
     later = Store(rw, "20260104T000000Z-dddd")
     later.start_run("demo", "extract")
-    later.apply_facts("demo", PAGE, "h_page3", [Fact("project", "alpha", "phase", "Construction", "json phase")])  # name removed
+    later.apply_facts("demo", PAGE, "h_page3", [  # name removed
+        Fact("project", "alpha", "phase", "Construction", "json phase"),
+        Fact("project", "alpha", "location", {"lat": 43.65, "lon": -79.38}, "json lat/lon"),
+        Fact("project", "alpha", "first_published_at", "2024-05-01T10:00:00Z", "page.first_published_at"),
+    ])
     later.finish_run("{}")
     rw.commit()
     rw.close()
@@ -283,3 +292,20 @@ def test_pdf_page_text_is_rendered_as_html_not_markdown(db):
     at.run()
     assert not at.exception
     assert any("<mark>" in h.proto.body for h in at.get("html"))
+
+
+def test_overview_numbers(conn):
+    o = q.overview(conn, "demo")
+    assert (o["entities"], o["pages"], o["files"], o["skips"]) == (2, 1, 1, 2)
+    assert o["llm_cost_usd"] == 0.01
+
+
+def test_overview_charts_data(conn):
+    assert {(r["entity_type"], r["method"]): r["n"] for r in q.facts_by_type_method(conn, "demo")} == {
+        ("project", "parse"): 4, ("document", "llm"): 1}
+    assert q.label_counts(conn, "demo", "project", "phase") == [{"value": "Construction", "n": 1}]
+    assert q.files_per_host(conn, "demo") == [{"host": "files.example.net", "n": 1}]
+    assert q.entities_per_year(conn, "demo") == [{"year": "2024", "entity_type": "project", "n": 1}]
+    assert q.locations(conn, "demo") == [{"entity_type": "project", "entity_key": "alpha", "name": "Alpha Site",
+                                          "lat": 43.65, "lon": -79.38}]
+

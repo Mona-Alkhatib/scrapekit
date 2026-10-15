@@ -267,3 +267,66 @@ def find_excerpt(text: str, excerpt: str) -> tuple[int, int] | None:
     pattern = r"\W*".join(re.escape(w.strip(".,")) for w in words if w.strip(".,"))
     match = re.search(pattern, text, re.IGNORECASE)
     return match.span() if match else None
+
+
+# ---------- overview ----------
+
+# Most reliable date first, same order as the export's best_date.
+DATE_FIELDS = ("first_published_at", "llm_document_date", "pdf_created")
+
+
+def overview(conn, source: str) -> dict:
+    one = lambda sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731
+    cost = sum(json.loads(r["stats_json"] or "{}").get("llm_cost_usd", 0.0)
+               for r in _rows(conn, "SELECT stats_json FROM runs WHERE source = ?", (source,)))
+    return {
+        "entities": one("SELECT COUNT(DISTINCT entity_type || ':' || entity_key) FROM facts"
+                        " WHERE source = ? AND valid_to IS NULL", source),
+        "facts": one("SELECT COUNT(*) FROM facts WHERE source = ? AND valid_to IS NULL", source),
+        "pages": one("SELECT COUNT(*) FROM documents WHERE source = ? AND kind = 'page' AND current_hash IS NOT NULL", source),
+        "files": one("SELECT COUNT(*) FROM documents WHERE source = ? AND kind = 'file' AND current_hash IS NOT NULL", source),
+        "skips": one("SELECT COUNT(*) FROM skips s JOIN runs r ON r.run_id = s.run_id WHERE r.source = ?", source),
+        "runs": one("SELECT COUNT(*) FROM runs WHERE source = ?", source),
+        "llm_cost_usd": round(cost, 4),
+    }
+
+
+def facts_by_type_method(conn, source: str) -> list[dict]:
+    return _rows(conn, """SELECT entity_type, method, COUNT(*) AS n FROM facts
+                          WHERE source = ? AND valid_to IS NULL GROUP BY 1, 2 ORDER BY 1, 2""", (source,))
+
+
+def label_counts(conn, source: str, entity_type: str, field: str) -> list[dict]:
+    """How many entities have each value of a text field, e.g. projects per phase."""
+    return _rows(conn, """SELECT json_extract(value, '$') AS value, COUNT(*) AS n FROM facts
+                          WHERE source = ? AND entity_type = ? AND field = ? AND valid_to IS NULL
+                            AND json_type(value) = 'text'
+                          GROUP BY 1 ORDER BY n DESC, value""", (source, entity_type, field))
+
+
+def files_per_host(conn, source: str) -> list[dict]:
+    return _rows(conn, """SELECT host, COUNT(*) AS n FROM documents
+                          WHERE source = ? AND kind = 'file' AND current_hash IS NOT NULL
+                          GROUP BY host ORDER BY n DESC""", (source,))
+
+
+def entities_per_year(conn, source: str) -> list[dict]:
+    """Entities per year of their best date (publish date, else the date in the document, else PDF metadata)."""
+    best = "COALESCE(" + ", ".join(
+        f"MAX(CASE WHEN field = '{f}' THEN substr(json_extract(value, '$'), 1, 4) END)" for f in DATE_FIELDS) + ")"
+    return _rows(conn, f"""SELECT year, entity_type, COUNT(*) AS n FROM (
+                               SELECT entity_type, {best} AS year FROM facts
+                               WHERE source = ? AND valid_to IS NULL GROUP BY entity_type, entity_key)
+                           WHERE year GLOB '[12][0-9][0-9][0-9]' GROUP BY year, entity_type ORDER BY year, entity_type""",
+                 (source,))
+
+
+def locations(conn, source: str) -> list[dict]:
+    """Every entity with a location fact, with its name, for a map."""
+    name = "COALESCE(" + ", ".join(
+        f"(SELECT json_extract(n.value, '$') FROM facts n WHERE n.source = f.source AND n.entity_type = f.entity_type"
+        f" AND n.entity_key = f.entity_key AND n.field = '{x}' AND n.valid_to IS NULL)" for x in NAME_FIELDS[:2]) + ")"
+    return _rows(conn, f"""SELECT f.entity_type, f.entity_key, {name} AS name,
+                                  json_extract(f.value, '$.lat') AS lat, json_extract(f.value, '$.lon') AS lon
+                           FROM facts f WHERE f.source = ? AND f.field = 'location' AND f.valid_to IS NULL
+                             AND json_extract(f.value, '$.lat') IS NOT NULL ORDER BY f.entity_key""", (source,))

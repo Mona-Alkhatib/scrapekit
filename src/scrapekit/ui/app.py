@@ -26,7 +26,8 @@ with st.sidebar:
 
 views = Path(__file__).parent / "views"
 nav = st.navigation([
-    st.Page(views / "runs.py", title="Runs", icon=":material/history:", default=True),
+    st.Page(views / "overview.py", title="Overview", icon=":material/dashboard:", default=True),
+    st.Page(views / "runs.py", title="Runs", icon=":material/history:"),
     st.Page(views / "entities.py", title="Entities", icon=":material/category:"),
     st.Page(views / "facts.py", title="Facts", icon=":material/fact_check:"),
     st.Page(views / "documents.py", title="Pages & files", icon=":material/description:"),
