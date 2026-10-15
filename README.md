@@ -27,7 +27,7 @@ Two runs into a fresh database: a first run, then an unchanged repeat 14 minutes
 | Pages processed | 250 | 250 checked, 0 changed |
 | Files processed | 468 (466 PDFs with text, 2 scanned) | 467 unchanged (440 not re-checked: immutable URLs), 1 now 404 |
 | Documents extracted | 718 | 0 (all unchanged, skipped) |
-| Useful records | 712 entities (74 projects, 136 news items, 468 documents, 34 pages) with 8,139 facts | no changes, 0 new facts |
+| Useful records | 712 entities (74 projects, 136 news items, 468 documents, 34 pages) with 8,139 facts [2] | no changes, 0 new facts |
 | Facts by method | 5,385 rule-based (exact, free) + 2,754 LLM fields holding 3,221 cited facts | none |
 | LLM facts dropped by the excerpt check | 65 of 3,286 (2%) | none |
 | Paid LLM calls | 466 | 0 (466 cache hits) |
@@ -36,6 +36,8 @@ Two runs into a fresh database: a first run, then an unchanged repeat 14 minutes
 | Skipped or failed links | 190, each with a reason: 170 off-domain, 7 mailto/tel, 3 over 50 MB, 3 blocked by robots.txt, 2 excluded paths, 2 dead links, 2 scanned PDFs, 1 forbidden (403) | same, plus 1 toronto.ca PDF that returned 404 in run 2 and was still 404 when re-checked (logged, last good facts kept) |
 
 [1] These runs had a since-fixed bug: parallel workers could each fetch the same host's `robots.txt` (up to 4 times instead of once). Across the 8 hosts contacted, that is at most 24 extra requests per run (about 3% of run 1, 8% of run 2). Fixed with a per-host lock; an unchanged 10-page run went from 18 to 15 requests. All other numbers are unaffected.
+
+[2] Found later by a code review: the generic page extractor ignored the query string, so the news listing and its 6 topic filters (`/news?topic=...`) were counted as one page entity with several current values (28 of 8,139 fact rows). Fixed: the query string is now part of the page id. Re-extracting these runs' saved copies (free, no LLM, pages only) gives 718 entities: 24 facts move to the 6 new entities and the old rows are kept as history. Nothing else changes. The official runs are left as they were.
 
 **Costs** (labeled):
 

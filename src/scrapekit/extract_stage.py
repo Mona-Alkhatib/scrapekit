@@ -32,7 +32,7 @@ FIELD_DOCS = {
 }
 
 # Bump a version when its extractor's output changes, so old content is re-extracted once.
-EXTRACTOR_VERSIONS = {"generic": 1, "storyblok": 2, "pdf": 1}
+EXTRACTOR_VERSIONS = {"generic": 2, "storyblok": 3, "pdf": 1}  # 2 / 3: query string kept in page ids
 
 
 def extractor_id(name: str) -> str:

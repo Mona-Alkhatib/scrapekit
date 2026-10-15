@@ -18,7 +18,10 @@ FIELD_DOCS = {
 
 
 def page_key(url: str) -> str:
-    return urlparse(url).path.strip("/") or "home"
+    """The page's id: its path, plus the query string, since /news?topic=x is a different page from /news."""
+    parts = urlparse(url)
+    key = parts.path.strip("/") or "home"
+    return f"{key}?{parts.query}" if parts.query else key
 
 
 def main_text(tree: LexborHTMLParser) -> str:

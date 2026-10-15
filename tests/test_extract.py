@@ -155,3 +155,13 @@ async def test_export_has_current_entities_and_full_history(settings, tmp_path):
     facts = [json.loads(l) for l in (tmp_path / "export/createto/facts.jsonl").read_text().splitlines()]
     phases = [f["value"] for f in facts if f["field"] == "phase"]
     assert phases == ["Leasing", "Completed"] and counts["runs"] == 2
+
+
+def test_filtered_listing_pages_are_separate_entities():
+    """/news and /news?topic=x are different pages; one key for both gave one entity several current values."""
+    from scrapekit.extract import generic_html
+
+    html = b"<html><head><title>News</title></head><body><main>x</main></body></html>"
+    keys = {f.entity_key for url in ("https://example.org/news", "https://example.org/news?topic=a")
+            for f in generic_html.extract(url, html)}
+    assert keys == {"news", "news?topic=a"}
