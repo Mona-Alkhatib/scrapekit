@@ -1,5 +1,6 @@
 """Shared pieces for every page: the database connection, the source picker, tables, provenance."""
 
+import hashlib
 import html
 import json
 import os
@@ -55,11 +56,18 @@ def table(rows: list[dict], key: str, columns: list[str] | None = None, column_c
     if not rows:
         st.caption("Nothing matches.")
         return None
+    # Streamlit remembers a selection as a row number. When the rows change (a filter, another parent row),
+    # that number would point at a different row, so drop the old selection instead.
+    fingerprint = hashlib.md5(repr([tuple(r.values())[:3] for r in rows]).encode()).hexdigest()
+    previous = st.session_state.get(f"_rows_{key}")
+    if previous is not None and previous != fingerprint and key in st.session_state:
+        del st.session_state[key]
+    st.session_state[f"_rows_{key}"] = fingerprint
     frame = pd.DataFrame([_readable(r) for r in rows]).convert_dtypes()  # keeps ids as integers next to blanks
     event = st.dataframe(frame, key=key, hide_index=True, on_select="rerun", selection_mode="single-row",
                          column_order=columns, column_config=column_config)
     picked = event.selection.rows
-    return rows[picked[0]] if picked else None
+    return rows[picked[0]] if picked and picked[0] < len(rows) else None
 
 
 def provenance(conn, fact: dict) -> None:
@@ -88,8 +96,8 @@ def provenance(conn, fact: dict) -> None:
             else:
                 body = html.escape(text)
                 st.caption("Quote not found verbatim in this page's text (spacing differs); showing the page.")
-            body = body.replace("$", "&#36;")  # Streamlit would read $...$ as a math formula
-            st.markdown(f"<div style='white-space:pre-wrap;font-size:0.85em'>{body}</div>", unsafe_allow_html=True)
+            # st.html shows the escaped text as-is: no Markdown or math parsing of PDF text.
+            st.html(f"<div style='white-space:pre-wrap;font-size:0.85em'>{body}</div>")
     if not quotes and fact["method"] == "parse":
         st.caption(f"Read exactly from the saved copy at `{fact['locator']}`.")
 

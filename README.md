@@ -11,6 +11,7 @@ The first source is [CreateTO](https://createto.ca). Each website is described b
 - Writes a metrics report for every run (time, requests, files, records, paid calls, cost).
 - Repeat runs use conditional requests and skip files whose URL never changes, so unchanged content is not downloaded or processed again.
 - Everything site-specific lives in one config file per website; a test keeps site names out of the rest of the code.
+- A read-only data browser (`scrapekit ui`) lets a downstream engineer navigate runs, entities, facts, pages and files, and skips, down to the raw file and the quoted PDF page.
 
 How it works: see [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -127,6 +128,31 @@ uv run scrapekit variants createto                             # rebuild fixture
 
 Results: [examples/variants/REPORT.md](examples/variants/REPORT.md).
 
+## Data browser (UI)
+
+A local, read-only app for engineers who consume the data: see what was scraped and parsed, follow any value back to its source, and check how each run went.
+
+```bash
+uv sync --extra ui                                # Streamlit, only needed for the UI
+uv run scrapekit ui --data-dir data/submission    # opens http://localhost:8501
+```
+
+| Page | What you can do |
+|---|---|
+| Runs | Every run with status (ok, ok with failures, incomplete), time, requests, 304s, downloads, facts, skips and LLM cost. Select a run for its skips and the facts it added, changed or removed. |
+| Entities | Projects, news items, documents and pages, filtered by type or searched by any value. Select one for all its facts; select a fact for its provenance; toggle history to see replaced values. |
+| Facts | Every value, filtered by entity type, field, method (rules or LLM), run, current or all. |
+| Pages & files | Every URL with host, status, saved versions, the raw copy (PDF viewer or HTML source, plus download), the facts read from it, its links and its skips. |
+| Skip log | Every skipped or failed link with its reason, filtered by reason, run or URL. |
+
+**Provenance panel:** for any fact, its source URL, method, locator, run, when it was valid and the content hash of the snapshot it came from. For an LLM fact from a PDF, the saved text of the cited page with the quote highlighted.
+
+![Runs](docs/img/ui-runs.png)
+![A PDF fact with its quote highlighted on the cited page](docs/img/ui-provenance.png)
+![Skip log](docs/img/ui-skips.png)
+
+How it is built and why: [docs/DESIGN.md section 12](docs/DESIGN.md).
+
 ## Adding a website
 
 1. Create `src/scrapekit/sources/<name>.py` with a `Source`: start URLs, hosts to crawl, sitemap, paths to skip, and who publishes it (used in the LLM prompt). Copy `sources/createto.py` as a template.
@@ -141,7 +167,7 @@ With no extractor settings, pages use the generic extractor (title, description,
 uv run pytest
 ```
 
-Tests run against a fake site and a fake LLM, with no network access and no cost. They include a guard that fails if a website name appears in code outside `sources/`.
+Tests run against a fake site and a fake LLM, with no network access and no cost. They include a guard that fails if a website name appears in code outside `sources/`. The UI tests build a small database with the real storage code and render every page with Streamlit's `AppTest` (including an empty database, a crashed run and a missing raw file).
 
 ## Status
 

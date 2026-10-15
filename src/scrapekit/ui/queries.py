@@ -71,17 +71,28 @@ def run(conn, run_id: str) -> dict | None:
 
 
 def run_fact_changes(conn, run_id: str, limit: int = 1000) -> list[dict]:
-    """Facts this run added or replaced, plus facts it closed without a replacement (removed)."""
-    r = _rows(conn, "SELECT started_at, finished_at FROM runs WHERE run_id = ?", (run_id,))
+    """Facts this run added or replaced, plus facts it closed without a replacement (removed).
+
+    Removals carry no run id, only a time, so they are matched to the run's time window: from its start to
+    its end, or for a run that never finished, to the start of the next run of the same source.
+    """
+    r = _rows(conn, "SELECT source, started_at, finished_at FROM runs WHERE run_id = ?", (run_id,))
     if not r:
         return []
+    source, start, end = r[0]["source"], r[0]["started_at"], r[0]["finished_at"]
     added = _rows(conn, """
-        SELECT CASE WHEN EXISTS (SELECT 1 FROM facts o WHERE o.superseded_by = f.id) THEN 'updated' ELSE 'new' END
-               AS change, f.* FROM facts f WHERE f.run_id = ? ORDER BY f.id LIMIT ?""", (run_id, limit))
-    removed = _rows(conn, """
+        SELECT CASE WHEN f.id IN (SELECT superseded_by FROM facts WHERE superseded_by IS NOT NULL)
+                    THEN 'updated' ELSE 'new' END AS change, f.*
+        FROM facts f WHERE f.run_id = ? ORDER BY f.id LIMIT ?""", (run_id, limit))
+    if end:
+        window, params = "f.valid_to BETWEEN ? AND ?", [start, end]
+    else:
+        nxt = _rows(conn, "SELECT MIN(started_at) AS t FROM runs WHERE source = ? AND run_id > ?", (source, run_id))
+        window, params = "f.valid_to >= ? AND f.valid_to < ?", [start, nxt[0]["t"] or "9999"]
+    removed = _rows(conn, f"""
         SELECT 'removed' AS change, f.* FROM facts f
-        WHERE f.superseded_by IS NULL AND f.valid_to BETWEEN ? AND COALESCE(?, '9999') ORDER BY f.id LIMIT ?""",
-        (r[0]["started_at"], r[0]["finished_at"], limit))
+        WHERE f.source = ? AND f.superseded_by IS NULL AND {window} ORDER BY f.id LIMIT ?""",
+        [source, *params, limit])
     return added + removed
 
 

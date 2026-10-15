@@ -36,6 +36,7 @@ Visit every public page on createto.ca, download every file those pages link to 
 | **Files named by SHA-256** | Raw copies of pages and files | Identical content is stored once, and the hash doubles as the change detector. | Storing blobs in the database (makes it huge), naming by URL (breaks on changes). |
 | **OpenRouter** (via the OpenAI SDK) | LLM calls for PDFs | One API key for many model providers, so we can switch to a cheaper or better model by changing one setting. It reports the real cost of each call, which we sum per run. | Calling one provider directly (locks us in, cost must be computed by hand). |
 | **google/gemini-3.1-flash-lite** (default model) | Reads PDF text, returns structured facts | Cheap ($0.25 per million input tokens, $1.50 per million output), very long context, supports strict JSON schema output. Good enough for "find addresses, dates and decisions with a quote". | Larger models cost 3x to 10x more; worth testing on a small labeled sample before switching. Configurable with `--llm-model`. |
+| **Streamlit** (UI only, optional extra) | The read-only data browser (section 12) | Python only, so the UI reuses the project's language and tests; clickable tables, a PDF viewer and multi-page navigation are built in; starts with one command. A consumer tool needs to be clear and fast to build, not pixel perfect. | FastAPI + React (two codebases, much more code), Gradio (made for model demos, weaker tables). |
 | **pytest + respx** | Tests | respx fakes the website, so tests run offline in under a second and never touch CreateTO. | Recording real responses (brittle, and repeatedly hits the real site). |
 
 ## 4. Big picture
@@ -112,7 +113,8 @@ What a Source can say about its website:
 | `export.py` | JSON Lines export for other services. |
 | `replay.py` | Serves saved copies as if they were the website. |
 | `variants.py` | Builds fixtures and runs the first / unchanged / changed / failed scenarios. |
-| `cli.py` | `scrapekit run / crawl / extract / export / variants <source>` and `scrapekit sources` |
+| `ui/` | Read-only data browser (section 12): `queries.py` holds all SQL, `views/` one file per page. |
+| `cli.py` | `scrapekit run / crawl / extract / export / variants / ui` and `scrapekit sources` |
 
 ## 6. Extraction: from saved copies to facts
 
@@ -325,3 +327,44 @@ Measured on the live site: the unchanged repeat made 299 requests instead of 738
 | 3 | OpenRouter extraction for PDFs only, cached by hash, real cost tracking, budget cap | Done |
 | 4 | Replay mode and the 3 variants, JSONL export, faster repeat runs (immutable file URLs) | Done |
 | 5 | Two real runs, results table, labeled costs, example output, 5 year flag in export | Done |
+| UI-1 | Data browser: query module, runs, skip log, `scrapekit ui` | Done |
+| UI-2 | Entities and the provenance panel (PDF page with the quote highlighted) | Done |
+| UI-3 | Pages & files with raw viewer, facts | Done |
+| UI-4 | Review fixes, docs, screenshots | Done |
+
+## 12. Data browser (Part 2)
+
+A local app for a downstream engineer: see what was scraped and parsed, navigate it with full provenance, and check the status of past runs. It only reads.
+
+```
+scrapekit run   ──writes──▶  data/scrapekit.db  +  data/raw/<hash>
+                                     │
+                         read-only connection (mode=ro)
+                                     │
+                          ui/queries.py   ◀── all SQL, plain functions, tested without Streamlit
+                                     │
+                          ui/views/*.py   ◀── Streamlit pages, no SQL
+                                     │
+                          scrapekit ui  →  http://localhost:8501
+```
+
+| Choice | Why |
+|---|---|
+| Read SQLite directly, read-only | The database is already the source of truth; no copy to keep in sync. `mode=ro` means the UI cannot change data (a test checks it). |
+| One query module as the boundary | Pages never write SQL, so queries are tested on their own. This module is the API: putting FastAPI in front of it later is a thin wrapper, not a rewrite. |
+| No HTTP API yet | One local consumer does not need one. Add it when a second consumer (another service, a hosted UI) appears. |
+| Streamlit | See section 3. |
+| Click-through instead of many screens | Every table row opens its details: run → its skips and changed facts; entity → facts → provenance → history; URL → versions → raw copy → facts. |
+| Works for any source | The sidebar lists the sources and databases it finds; nothing in `ui/` names a website (the same guard test covers it). |
+
+**Provenance panel.** For any fact: source URL, method (rules or LLM), locator (JSON path, PDF metadata key, or page numbers), run, valid from / to, and the content hash of the snapshot it was read from. For an LLM fact the panel shows the saved text of the cited PDF page with the quote highlighted, so the reader checks the claim in one click. If the quote is split by a page footer, the page is shown with a note instead.
+
+**Details that matter for correctness.**
+- A table selection is a row number in Streamlit. When filters change the rows, the old selection is cleared, so the panel never shows a different fact than the one clicked.
+- "Facts this run changed" matches removals by time window; a run that never finished is bounded by the next run of the same source.
+- PDF text is shown as escaped HTML, never as Markdown, so `$` amounts and `#` or `1.` at line starts are shown exactly as in the source.
+- PDFs over 15 MB are offered as a download instead of an inline viewer.
+
+**Out of scope for now:** starting crawls from the UI, login, editing data, a hosted deployment.
+
+**Scaling it.** With Postgres and many sources, the same `queries.py` functions move behind a FastAPI service with pagination, and the UI (this one or a React app) calls that API. Run status would come from a `status` column written by the scheduler instead of being derived.

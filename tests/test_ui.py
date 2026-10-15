@@ -154,7 +154,7 @@ UI = Path(__file__).parent.parent / "src" / "scrapekit" / "ui"
 
 def render(page: str, db_path: Path) -> AppTest:
     os.environ["SCRAPEKIT_UI_DB"] = str(db_path)
-    at = AppTest.from_file(str(UI / "pages" / f"{page}.py"), default_timeout=30)
+    at = AppTest.from_file(str(UI / "views" / f"{page}.py"), default_timeout=30)
     return at.run()
 
 
@@ -175,7 +175,7 @@ def test_page_renders_on_empty_db(page, tmp_path):
 
 def test_selecting_a_run_shows_its_details(db):
     os.environ["SCRAPEKIT_UI_DB"] = str(db)
-    at = AppTest.from_file(str(UI / "pages" / "runs.py"), default_timeout=30)
+    at = AppTest.from_file(str(UI / "views" / "runs.py"), default_timeout=30)
     at.session_state["runs"] = {"selection": {"rows": [2], "columns": [], "cells": []}}  # oldest run
     at.run()
     assert not at.exception
@@ -185,13 +185,13 @@ def test_selecting_a_run_shows_its_details(db):
 
 def test_pdf_fact_shows_its_page_with_the_quote_highlighted(db):
     os.environ["SCRAPEKIT_UI_DB"] = str(db)
-    at = AppTest.from_file(str(UI / "pages" / "entities.py"), default_timeout=30)
+    at = AppTest.from_file(str(UI / "views" / "entities.py"), default_timeout=30)
     at.session_state["entities"] = {"selection": {"rows": [0], "columns": [], "cells": []}}  # the PDF document
     at.session_state["entity_facts"] = {"selection": {"rows": [0], "columns": [], "cells": []}}  # llm_key_facts
     at.run()
     assert not at.exception
-    shown = " ".join(m.value for m in at.markdown)
-    assert "<mark>The board approved   &#36;2.5 million</mark>" in shown
+    shown = " ".join(h.proto.body for h in at.get("html"))
+    assert "<mark>The board approved   $2.5 million</mark>" in shown
 
 
 def test_tables_show_plain_values_and_integer_ids():
@@ -208,7 +208,7 @@ def select(at: AppTest, key: str, row: int) -> None:
 
 def test_document_shows_versions_raw_copy_and_facts(db):
     os.environ["SCRAPEKIT_UI_DB"] = str(db)
-    at = AppTest.from_file(str(UI / "pages" / "documents.py"), default_timeout=30)
+    at = AppTest.from_file(str(UI / "views" / "documents.py"), default_timeout=30)
     select(at, "documents", 0)  # sorted by kind then url: the PDF file comes first
     at.run()
     assert not at.exception
@@ -220,7 +220,7 @@ def test_document_shows_versions_raw_copy_and_facts(db):
 def test_document_raw_copy_missing_is_explained(db):
     (db.parent / "raw" / "report.pdf").unlink()
     os.environ["SCRAPEKIT_UI_DB"] = str(db)
-    at = AppTest.from_file(str(UI / "pages" / "documents.py"), default_timeout=30)
+    at = AppTest.from_file(str(UI / "views" / "documents.py"), default_timeout=30)
     select(at, "documents", 0)
     at.run()
     assert not at.exception
@@ -229,7 +229,57 @@ def test_document_raw_copy_missing_is_explained(db):
 
 def test_facts_filter_by_method(db):
     os.environ["SCRAPEKIT_UI_DB"] = str(db)
-    at = AppTest.from_file(str(UI / "pages" / "facts.py"), default_timeout=30).run()
+    at = AppTest.from_file(str(UI / "views" / "facts.py"), default_timeout=30).run()
     at.selectbox[2].set_value("llm").run()
     assert not at.exception
     assert set(at.dataframe[0].value["method"]) == {"llm"}
+
+
+def test_no_streamlit_pages_folder():
+    """A folder named pages/ next to app.py turns on Streamlit's automatic pages, which bypass app.py's sidebar."""
+    assert not (UI / "pages").exists()
+
+
+def test_changing_a_filter_clears_the_selected_row(db):
+    os.environ["SCRAPEKIT_UI_DB"] = str(db)
+    at = AppTest.from_file(str(UI / "views" / "entities.py"), default_timeout=30)
+    select(at, "entities", 0)  # the PDF document
+    select(at, "entity_facts", 0)
+    at.run()
+    assert at.subheader[0].value != "Alpha Site"
+    at.selectbox[0].set_value("project").run()  # row 0 is now a different entity
+    assert not at.exception
+    assert not at.subheader  # selection cleared, not silently moved to another entity
+    assert not any("** of `" in m.value for m in at.markdown)
+
+
+def test_run_changes_query_has_no_correlated_subquery(conn):
+    seen = []
+    conn.set_trace_callback(seen.append)
+    q.run_fact_changes(conn, "20260102T000000Z-bbbb")
+    conn.set_trace_callback(None)
+    plans = [" ".join(str(tuple(r)) for r in conn.execute("EXPLAIN QUERY PLAN " + sql)) for sql in seen if sql.lstrip().upper().startswith("SELECT")]
+    assert plans and not any("CORRELATED" in p for p in plans)
+
+
+def test_removed_facts_are_not_blamed_on_a_crashed_run(db):
+    rw = connect(db)
+    later = Store(rw, "20260104T000000Z-dddd")
+    later.start_run("demo", "extract")
+    later.apply_facts("demo", PAGE, "h_page3", [Fact("project", "alpha", "phase", "Construction", "json phase")])  # name removed
+    later.finish_run("{}")
+    rw.commit()
+    rw.close()
+    conn = q.open_db(db)
+    assert [c["field"] for c in q.run_fact_changes(conn, "20260103T000000Z-cccc") if c["change"] == "removed"] == []
+    assert [c["field"] for c in q.run_fact_changes(conn, "20260104T000000Z-dddd") if c["change"] == "removed"] == ["name"]
+
+
+def test_pdf_page_text_is_rendered_as_html_not_markdown(db):
+    os.environ["SCRAPEKIT_UI_DB"] = str(db)
+    at = AppTest.from_file(str(UI / "views" / "entities.py"), default_timeout=30)
+    select(at, "entities", 0)
+    select(at, "entity_facts", 0)
+    at.run()
+    assert not at.exception
+    assert any("<mark>" in h.proto.body for h in at.get("html"))

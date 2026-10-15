@@ -1,7 +1,5 @@
 """Entities: projects, news items, documents and pages, with every fact and where it came from."""
 
-import json
-
 import streamlit as st
 
 from scrapekit.ui import common, queries as q
@@ -20,9 +18,8 @@ if picked:
     history = st.toggle("Show history (replaced values too)")
     facts = q.entity_facts(conn, source, picked["entity_type"], picked["entity_key"], history=history)
     for f in facts:
-        f["shown"] = json.dumps(json.loads(f["value"]), ensure_ascii=False)[:200]
         f["status"] = "current" if f["valid_to"] is None else f"replaced {f['valid_to'][:10]}"
-    chosen = common.table(facts, "entity_facts", columns=["field", "shown", "method", "locator", "status", "valid_from"])
+    chosen = common.table(facts, "entity_facts", columns=["field", "value", "method", "locator", "status", "valid_from"])
     if chosen:
         common.provenance(conn, chosen)
         chain = q.fact_history(conn, chosen["id"])

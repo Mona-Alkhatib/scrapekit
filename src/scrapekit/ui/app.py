@@ -13,7 +13,7 @@ st.set_page_config(page_title="scrapekit data browser", layout="wide")
 
 with st.sidebar:
     st.header("scrapekit")
-    found = sorted(str(p) for p in Path("data").glob("**/scrapekit.db"))
+    found = sorted(str(p) for root in ("data", "examples") for p in Path(root).glob("**/scrapekit.db"))
     default = str(common.db_path())
     options = sorted(set(found) | {default})
     st.session_state["db_path"] = st.selectbox("Database", options, index=options.index(default),
@@ -24,12 +24,12 @@ with st.sidebar:
             st.session_state["source"] = st.selectbox("Source", names)
     st.caption("Read-only. Nothing here changes the data.")
 
-pages = Path(__file__).parent / "pages"
+views = Path(__file__).parent / "views"
 nav = st.navigation([
-    st.Page(pages / "runs.py", title="Runs", icon=":material/history:", default=True),
-    st.Page(pages / "entities.py", title="Entities", icon=":material/category:"),
-    st.Page(pages / "facts.py", title="Facts", icon=":material/fact_check:"),
-    st.Page(pages / "documents.py", title="Pages & files", icon=":material/description:"),
-    st.Page(pages / "skips.py", title="Skip log", icon=":material/block:"),
+    st.Page(views / "runs.py", title="Runs", icon=":material/history:", default=True),
+    st.Page(views / "entities.py", title="Entities", icon=":material/category:"),
+    st.Page(views / "facts.py", title="Facts", icon=":material/fact_check:"),
+    st.Page(views / "documents.py", title="Pages & files", icon=":material/description:"),
+    st.Page(views / "skips.py", title="Skip log", icon=":material/block:"),
 ])
 nav.run()

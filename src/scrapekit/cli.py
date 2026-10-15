@@ -150,7 +150,8 @@ def main() -> None:
         app = Path(__file__).parent / "ui" / "app.py"
         env = dict(os.environ, SCRAPEKIT_UI_DB=str(replace(Settings(), data_dir=args.data_dir).db_path))
         raise SystemExit(subprocess.call([sys.executable, "-m", "streamlit", "run", str(app), "--server.port",
-                                          str(args.port), "--browser.gatherUsageStats", "false"], env=env))
+                                          str(args.port), "--browser.gatherUsageStats", "false",
+                                          "--client.toolbarMode", "minimal"], env=env))
     elif args.command == "export":
         get_source(args.source)
         store = Store(connect(replace(Settings(), data_dir=args.data_dir).db_path), run_id="export")
