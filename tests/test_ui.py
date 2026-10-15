@@ -148,7 +148,7 @@ def test_find_excerpt_loose():
     assert q.find_excerpt(text, "nothing like this") is None
 
 
-PAGES = ["runs", "skips", "entities"]  # Task 4 adds "documents", "facts"
+PAGES = ["runs", "skips", "entities", "documents", "facts"]
 UI = Path(__file__).parent.parent / "src" / "scrapekit" / "ui"
 
 
@@ -200,3 +200,36 @@ def test_tables_show_plain_values_and_integer_ids():
     assert _readable({"value": '"Completed"'})["value"] == "Completed"
     assert _readable({"value": '{"lat": 1.5}'})["value"] == '{"lat": 1.5}'
     assert _readable({"value": "not json"})["value"] == "not json"
+
+
+def select(at: AppTest, key: str, row: int) -> None:
+    at.session_state[key] = {"selection": {"rows": [row], "columns": [], "cells": []}}
+
+
+def test_document_shows_versions_raw_copy_and_facts(db):
+    os.environ["SCRAPEKIT_UI_DB"] = str(db)
+    at = AppTest.from_file(str(UI / "pages" / "documents.py"), default_timeout=30)
+    select(at, "documents", 0)  # sorted by kind then url: the PDF file comes first
+    at.run()
+    assert not at.exception
+    assert at.subheader[0].value == PDF
+    assert at.get("download_button")  # raw copy found on disk
+    assert any(s["content_hash"] == "h_pdf" for s in at.dataframe[1].value.to_dict("records"))
+
+
+def test_document_raw_copy_missing_is_explained(db):
+    (db.parent / "raw" / "report.pdf").unlink()
+    os.environ["SCRAPEKIT_UI_DB"] = str(db)
+    at = AppTest.from_file(str(UI / "pages" / "documents.py"), default_timeout=30)
+    select(at, "documents", 0)
+    at.run()
+    assert not at.exception
+    assert any("not on this machine" in c.value for c in at.caption)
+
+
+def test_facts_filter_by_method(db):
+    os.environ["SCRAPEKIT_UI_DB"] = str(db)
+    at = AppTest.from_file(str(UI / "pages" / "facts.py"), default_timeout=30).run()
+    at.selectbox[2].set_value("llm").run()
+    assert not at.exception
+    assert set(at.dataframe[0].value["method"]) == {"llm"}

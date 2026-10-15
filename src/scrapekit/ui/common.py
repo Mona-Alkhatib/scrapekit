@@ -11,6 +11,7 @@ import streamlit as st
 from . import queries as q
 
 DB_ENV = "SCRAPEKIT_UI_DB"
+MAX_INLINE_PDF_BYTES = 15_000_000  # bigger PDFs are slow to embed in the browser; offer download only
 
 
 def db_path() -> Path:
@@ -91,3 +92,20 @@ def provenance(conn, fact: dict) -> None:
             st.markdown(f"<div style='white-space:pre-wrap;font-size:0.85em'>{body}</div>", unsafe_allow_html=True)
     if not quotes and fact["method"] == "parse":
         st.caption(f"Read exactly from the saved copy at `{fact['locator']}`.")
+
+
+def raw_viewer(conn, content_hash: str, content_type: str | None) -> None:
+    """Shows the exact bytes we saved: PDFs in a viewer, HTML as source. Always offers a download."""
+    path = q.raw_path(conn, content_hash, raw_dir=db_path().parent / "raw")
+    if path is None:
+        st.caption("Raw copy is not on this machine (only the database was copied).")
+        return
+    data = path.read_bytes()
+    st.download_button("Download raw copy", data, file_name=path.name, key=f"dl_{content_hash}")
+    if path.suffix == ".pdf" or "pdf" in (content_type or ""):
+        if len(data) > MAX_INLINE_PDF_BYTES:
+            st.caption(f"{len(data) / 1e6:.0f} MB: too big to show inline, use the download button.")
+        else:
+            st.pdf(data, height=600)
+    else:
+        st.code(data[:200_000].decode("utf-8", "replace"), language="html")

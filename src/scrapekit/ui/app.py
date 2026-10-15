@@ -28,6 +28,8 @@ pages = Path(__file__).parent / "pages"
 nav = st.navigation([
     st.Page(pages / "runs.py", title="Runs", icon=":material/history:", default=True),
     st.Page(pages / "entities.py", title="Entities", icon=":material/category:"),
+    st.Page(pages / "facts.py", title="Facts", icon=":material/fact_check:"),
+    st.Page(pages / "documents.py", title="Pages & files", icon=":material/description:"),
     st.Page(pages / "skips.py", title="Skip log", icon=":material/block:"),
 ])
 nav.run()
