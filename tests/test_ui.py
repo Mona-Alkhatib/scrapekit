@@ -148,7 +148,7 @@ def test_find_excerpt_loose():
     assert q.find_excerpt(text, "nothing like this") is None
 
 
-PAGES = ["runs", "skips"]  # Task 3 adds "entities", Task 4 adds "documents", "facts"
+PAGES = ["runs", "skips", "entities"]  # Task 4 adds "documents", "facts"
 UI = Path(__file__).parent.parent / "src" / "scrapekit" / "ui"
 
 
@@ -181,3 +181,22 @@ def test_selecting_a_run_shows_its_details(db):
     assert not at.exception
     assert at.subheader[0].value == "20260101T000000Z-aaaa"
     assert {m.label: m.value for m in at.metric}["Status"] == "ok, with failures"
+
+
+def test_pdf_fact_shows_its_page_with_the_quote_highlighted(db):
+    os.environ["SCRAPEKIT_UI_DB"] = str(db)
+    at = AppTest.from_file(str(UI / "pages" / "entities.py"), default_timeout=30)
+    at.session_state["entities"] = {"selection": {"rows": [0], "columns": [], "cells": []}}  # the PDF document
+    at.session_state["entity_facts"] = {"selection": {"rows": [0], "columns": [], "cells": []}}  # llm_key_facts
+    at.run()
+    assert not at.exception
+    shown = " ".join(m.value for m in at.markdown)
+    assert "<mark>The board approved   &#36;2.5 million</mark>" in shown
+
+
+def test_tables_show_plain_values_and_integer_ids():
+    from scrapekit.ui.common import _readable
+
+    assert _readable({"value": '"Completed"'})["value"] == "Completed"
+    assert _readable({"value": '{"lat": 1.5}'})["value"] == '{"lat": 1.5}'
+    assert _readable({"value": "not json"})["value"] == "not json"
