@@ -6,21 +6,26 @@ import pandas as pd
 import streamlit as st
 
 from scrapekit.sources import SOURCES
-from scrapekit.ui import common, queries as q
+from scrapekit.ui import ask, common, queries as q
 
 st.title("Overview")
 conn, source = common.require_data()
 o = q.overview(conn, source)
 
-cols = st.columns(6)
+asked = ask.log_totals(ask.log_path(common.db_path()), source)
+cols = st.columns(7)
 cols[0].metric("Entities", f"{o['entities']:,}", help="Projects, news items, documents and pages with current facts")
 cols[1].metric("Facts", f"{o['facts']:,}", help="One field of one entity, each with its own source")
 cols[2].metric("Pages saved", f"{o['pages']:,}")
 cols[3].metric("Files saved", f"{o['files']:,}")
-cols[4].metric("Skipped links (last run)", f"{o['skips_last_run']:,}",
+cols[4].metric("Skipped (last run)", f"{o['skips_last_run']:,}",
                help="Links found in the last run but not followed. Most point to other websites, skipped on purpose. "
                     "Every run finds them again, so the count is per run. See the Skip log page.")
-cols[5].metric("LLM cost", f"${o['llm_cost_usd']:.2f}", help=f"Actual, summed over {o['runs']} runs")
+cols[5].metric("LLM cost (runs)", f"${o['llm_cost_usd']:.2f}",
+               help=f"What the scraper spent reading PDFs, actual, summed over {o['runs']} runs")
+cols[6].metric("Ask AI cost", f"${asked['cost_usd']:.4f}",
+               help=f"What {asked['questions']} questions on the Ask AI page cost, actual. Kept separate: "
+                    "it is the cost of querying the data, not of building it.")
 
 
 def bars(rows: list[dict], x: str, y: str = "n", color: str | None = None, horizontal: bool = False) -> None:

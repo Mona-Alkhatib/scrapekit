@@ -148,3 +148,29 @@ def test_ui_code_names_no_site_vocabulary():
     offenders = [f"{p.name}:{n}" for p in root.rglob("*.py")
                  for n, line in enumerate(p.read_text().splitlines(), 1) if words.search(line)]
     assert offenders == []
+
+
+def test_each_question_is_logged_and_totals_add_up(db, tmp_path):  # noqa: F811
+    log = ask.log_path(db)
+    assert log == db.parent / "ask_log.jsonl" and ask.log_totals(log) == {"questions": 0, "cost_usd": 0.0}
+    for _ in range(2):
+        result = ask.Asker(FakeChat(GOOD, {"answer": "alpha"}), db, docs={}, source="demo").ask("Which phase?")
+        ask.append_log(log, result, source="demo")
+    entries = ask.read_log(log)
+    assert len(entries) == 2 and entries[0]["question"] == "Which phase?" and entries[0]["sql"].startswith("SELECT")
+    assert entries[0]["rows"] == 1 and entries[0]["source"] == "demo" and "at" in entries[0]
+    assert ask.log_totals(log) == {"questions": 2, "cost_usd": pytest.approx(0.004)}
+
+
+def test_a_broken_log_line_is_skipped(db):  # noqa: F811
+    log = ask.log_path(db)
+    log.write_text('{"question": "ok", "cost_usd": 0.001}\nnot json\n')
+    assert ask.log_totals(log)["questions"] == 1
+
+
+def test_overview_shows_ask_ai_cost_separately(db):  # noqa: F811
+    ask.log_path(db).write_text('{"question": "q", "cost_usd": 0.0015, "source": "demo"}\n')
+    os.environ["SCRAPEKIT_UI_DB"] = str(db)
+    at = AppTest.from_file(str(Path(__file__).parent.parent / "src/scrapekit/ui/views/overview.py"), default_timeout=30).run()
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["LLM cost (runs)"] == "$0.01" and metrics["Ask AI cost"] == "$0.0015"

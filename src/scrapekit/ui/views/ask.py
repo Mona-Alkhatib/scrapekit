@@ -51,6 +51,10 @@ if st.button("Ask", type="primary", disabled=not question or budget_left <= 0):
         except Exception as exc:  # network or API errors: show them, never crash the page
             result = ask.AskResult(question, error=f"{type(exc).__name__}: {exc}")
     st.session_state["ai_spent"] = spent + result.cost_usd
+    try:
+        ask.append_log(ask.log_path(common.db_path()), result, source)
+    except OSError as exc:  # a read-only folder must not break the page
+        st.warning(f"Could not save this question to the log: {exc}")
     history.insert(0, result)
     del history[MAX_HISTORY:]  # keep memory bounded
     st.rerun()
@@ -70,3 +74,13 @@ for i, r in enumerate(history):
             st.dataframe(pd.DataFrame(r.rows, columns=r.columns), hide_index=True, key=f"ai_rows_{len(history) - i}")
             st.caption(f"{len(r.rows)} rows{' (capped at 500)' if r.truncated else ''}.")
         st.caption(f"Attempts: {r.attempts}. Cost: \\${r.cost_usd:.4f} (actual, from OpenRouter).")
+
+past = ask.read_log(ask.log_path(common.db_path()))
+if past:
+    total = ask.log_totals(ask.log_path(common.db_path()), source)
+    with st.expander(f"Question log: {total['questions']} questions, \\${total['cost_usd']:.4f} in total (all sessions)"):
+        st.caption("Saved next to the database in ask_log.jsonl: an audit trail of what was asked, the SQL that ran, "
+                   "and what it cost.")
+        st.dataframe(pd.DataFrame(past[::-1]).reindex(columns=["at", "question", "rows", "attempts", "cost_usd", "error", "sql"]),
+                     hide_index=True, key="ask_log")
+

@@ -336,7 +336,7 @@ Measured on the live site: the unchanged repeat made 299 requests instead of 738
 
 ## 12. Data browser (Part 2)
 
-A local app for a downstream engineer: see what was scraped and parsed, navigate it with full provenance, and check the status of past runs. It only reads.
+A local app for a downstream engineer: see what was scraped and parsed, navigate it with full provenance, and check the status of past runs. It never changes the scraper's data: the database is opened read-only. The one file it writes is `ask_log.jsonl`, the Ask AI question log (below).
 
 ```
 scrapekit run   ──writes──▶  data/scrapekit.db  +  data/raw/<hash>
@@ -391,6 +391,7 @@ question ─▶ model writes one SQL query (sees: tables, columns, data dictiona
 | Scraped text is untrusted | It reaches the answer step, so a poisoned page could ask the model for a link or an image. The answer is shown with every Markdown character escaped: no links, no images, no math. The model has no tools, so the worst case is a misleading sentence next to the real SQL and rows. |
 | Cost is always counted | A failed call keeps the cost already spent; if the provider reports no cost, a conservative $0.002 per call is counted so the cap still works. |
 | Same model as the PDF pass | `google/gemini-3.1-flash-lite`, about $0.001 per question, configurable with `SCRAPEKIT_LLM_MODEL`. |
+| A question log, kept apart from the data | Every question is appended to `ask_log.jsonl` next to the database: time, question, SQL, rows, attempts, cost, error. It is the audit trail of AI use, and the Overview shows its total as "Ask AI cost", separate from "LLM cost (runs)", because querying the data is not the cost of building it. The database stays read-only. |
 
 **Out of scope for now:** starting crawls from the UI, login, editing data, a hosted deployment.
 

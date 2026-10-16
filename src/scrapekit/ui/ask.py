@@ -230,6 +230,41 @@ class Asker:
         return result
 
 
+# ---------- the question log ----------
+# One JSON line per question, next to the database. The database itself stays read-only; this file is the
+# only thing the UI writes. It is the audit trail of AI use: what was asked, which SQL ran, what it cost.
+
+def log_path(db_path: Path) -> Path:
+    return Path(db_path).parent / "ask_log.jsonl"
+
+
+def append_log(path: Path, result: AskResult, source: str) -> None:
+    from datetime import datetime, timezone
+
+    entry = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": source,
+             "question": result.question, "sql": result.sql, "rows": len(result.rows), "attempts": result.attempts,
+             "cost_usd": round(result.cost_usd, 6), "error": result.error}
+    with Path(path).open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def read_log(path: Path) -> list[dict]:
+    if not Path(path).exists():
+        return []
+    entries = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        try:
+            entries.append(json.loads(line))
+        except ValueError:
+            continue  # a half-written line must not break the page
+    return entries
+
+
+def log_totals(path: Path, source: str | None = None) -> dict:
+    entries = [e for e in read_log(path) if source is None or e.get("source") in (None, source)]
+    return {"questions": len(entries), "cost_usd": round(sum(float(e.get("cost_usd") or 0) for e in entries), 6)}
+
+
 class OpenRouterChat:
     """The real model, through OpenRouter. Same `complete` method as the test fake."""
 
