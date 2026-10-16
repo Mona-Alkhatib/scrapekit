@@ -237,7 +237,7 @@ def test_facts_filter_by_method(db):
     at = AppTest.from_file(str(UI / "views" / "facts.py"), default_timeout=30).run()
     at.selectbox[2].set_value("llm").run()
     assert not at.exception
-    assert set(at.dataframe[0].value["method"]) == {"llm"}
+    assert set(at.dataframe[0].value["method"]) == {"AI from PDF text (quote checked)"}
 
 
 def test_no_streamlit_pages_folder():
@@ -296,7 +296,9 @@ def test_pdf_page_text_is_rendered_as_html_not_markdown(db):
 
 def test_overview_numbers(conn):
     o = q.overview(conn, "demo")
-    assert (o["entities"], o["pages"], o["files"], o["skips"]) == (2, 1, 1, 2)
+    assert (o["entities"], o["pages"], o["files"]) == (2, 1, 1)
+    # Skips are counted for the latest finished run only: every run logs the same links again.
+    assert o["last_run"] == "20260102T000000Z-bbbb" and o["skips_last_run"] == 0
     assert o["llm_cost_usd"] == 0.01
 
 
@@ -347,3 +349,11 @@ def test_app_shows_one_database_without_a_picker(db):
     assert not at.exception
     assert not [s for s in at.sidebar.selectbox if s.label == "Database"]
     assert any(str(db.name) in c.value for c in at.sidebar.caption)
+
+
+def test_method_shown_in_plain_words():
+    from scrapekit.ui.common import _readable
+
+    assert _readable({"method": "parse"})["method"] == "Rules (exact, no AI)"
+    assert _readable({"method": "llm"})["method"] == "AI from PDF text (quote checked)"
+

@@ -22,7 +22,6 @@ with st.sidebar:
         elif names:
             st.session_state["source"] = names[0]
             st.caption(f"Source: {names[0]}")
-    st.caption("Read-only. Nothing here changes the data.")
 
 views = Path(__file__).parent / "views"
 nav = st.navigation([

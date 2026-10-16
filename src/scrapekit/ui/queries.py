@@ -277,6 +277,8 @@ DATE_FIELDS = ("first_published_at", "llm_document_date", "pdf_created")
 
 def overview(conn, source: str) -> dict:
     one = lambda sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731
+    # Each run logs the same skipped links again, so skips are counted for the latest finished run.
+    last = one("SELECT MAX(run_id) FROM runs WHERE source = ? AND finished_at IS NOT NULL", source)
     cost = sum(json.loads(r["stats_json"] or "{}").get("llm_cost_usd", 0.0)
                for r in _rows(conn, "SELECT stats_json FROM runs WHERE source = ?", (source,)))
     return {
@@ -285,7 +287,8 @@ def overview(conn, source: str) -> dict:
         "facts": one("SELECT COUNT(*) FROM facts WHERE source = ? AND valid_to IS NULL", source),
         "pages": one("SELECT COUNT(*) FROM documents WHERE source = ? AND kind = 'page' AND current_hash IS NOT NULL", source),
         "files": one("SELECT COUNT(*) FROM documents WHERE source = ? AND kind = 'file' AND current_hash IS NOT NULL", source),
-        "skips": one("SELECT COUNT(*) FROM skips s JOIN runs r ON r.run_id = s.run_id WHERE r.source = ?", source),
+        "last_run": last,
+        "skips_last_run": one("SELECT COUNT(*) FROM skips WHERE run_id = ?", last) if last else 0,
         "runs": one("SELECT COUNT(*) FROM runs WHERE source = ?", source),
         "llm_cost_usd": round(cost, 4),
     }

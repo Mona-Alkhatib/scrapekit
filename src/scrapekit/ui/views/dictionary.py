@@ -10,16 +10,18 @@ from scrapekit.ui import common, queries as q, tables_doc
 st.title("Data dictionary")
 conn, source = common.require_data()
 docs = field_docs(SOURCES.get(source))
-st.caption("Each fact is one field of one entity. `parse` = read exactly by rules from the saved page or PDF (free). "
-           "`llm` = read from PDF text by the model, with a quote checked on the cited page. "
-           "Coverage = share of entities of that type that have the field.")
+st.caption("Each fact is one field of one thing (a project, news item, document or page). "
+           "How it was found: Rules = copied exactly from the page's own data or the PDF file's properties (no AI). "
+           "AI = read from the PDF's text by a language model, with a quote checked on the cited page. "
+           "Coverage = share of things of that type that have the field.")
 
 stats = q.field_stats(conn, source)
 for kind in sorted({s["entity_type"] for s in stats}):
     rows = [s for s in stats if s["entity_type"] == kind]
     st.subheader(f"{kind} ({len(rows)} fields)")
     frame = pd.DataFrame([{
-        "field": s["field"], "meaning": describe(docs, kind, s["field"]) or "(no description yet)", "method": s["method"],
+        "field": s["field"], "meaning": describe(docs, kind, s["field"]) or "(no description yet)",
+        "how it was found": common.METHOD_LABELS.get(s["method"], s["method"]),
         "coverage": s["coverage"], "entities": s["entities"], "example": s["example"], "locator example": s["locator"],
     } for s in rows])
     st.dataframe(frame, hide_index=True, column_config={

@@ -12,6 +12,8 @@ import streamlit as st
 from . import queries as q
 
 DB_ENV = "SCRAPEKIT_UI_DB"
+# How a fact was found, in plain words (the database stores "parse" or "llm").
+METHOD_LABELS = {"parse": "Rules (exact, no AI)", "llm": "AI from PDF text (quote checked)"}
 MAX_INLINE_PDF_BYTES = 15_000_000  # bigger PDFs are slow to embed in the browser; offer download only
 
 
@@ -41,6 +43,8 @@ def require_data():
 
 def _readable(row: dict) -> dict:
     """Fact values are stored as JSON; show text as plain text and lists or objects as compact JSON."""
+    if row.get("method") in METHOD_LABELS:
+        row = {**row, "method": METHOD_LABELS[row["method"]]}
     if "value" not in row or not isinstance(row["value"], str):
         return row
     try:
@@ -75,7 +79,7 @@ def provenance(conn, fact: dict) -> None:
     value = json.loads(fact["value"])
     st.markdown(f"**{fact['field']}** of `{fact['entity_key']}`")
     meta = {
-        "source_url": fact["source_url"], "method": fact["method"], "locator": fact["locator"],
+        "source_url": fact["source_url"], "method": METHOD_LABELS.get(fact["method"], fact["method"]), "locator": fact["locator"],
         "run_id": fact["run_id"], "valid_from": fact["valid_from"], "valid_to": fact["valid_to"] or "current",
         "content_hash": fact["content_hash"],
     }

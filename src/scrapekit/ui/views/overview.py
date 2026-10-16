@@ -17,7 +17,9 @@ cols[0].metric("Entities", f"{o['entities']:,}", help="Projects, news items, doc
 cols[1].metric("Facts", f"{o['facts']:,}", help="One field of one entity, each with its own source")
 cols[2].metric("Pages saved", f"{o['pages']:,}")
 cols[3].metric("Files saved", f"{o['files']:,}")
-cols[4].metric("Skipped links", f"{o['skips']:,}", help="All runs, see the Skip log page")
+cols[4].metric("Skipped links (last run)", f"{o['skips_last_run']:,}",
+               help="Links found in the last run but not followed. Most point to other websites, skipped on purpose. "
+                    "Every run finds them again, so the count is per run. See the Skip log page.")
 cols[5].metric("LLM cost", f"${o['llm_cost_usd']:.2f}", help=f"Actual, summed over {o['runs']} runs")
 
 
@@ -35,9 +37,12 @@ def bars(rows: list[dict], x: str, y: str = "n", color: str | None = None, horiz
 
 left, right = st.columns(2)
 with left:
-    st.subheader("Facts by entity type and method")
-    st.caption("parse = read exactly by rules (free). llm = read from PDFs by the model, quote checked.")
-    bars(q.facts_by_type_method(conn, source), "entity_type", color="method")
+    st.subheader("Facts by entity type, and how they were found")
+    st.caption("Rules: copied exactly from the page's own data or the PDF file's properties; no AI, free. "
+               "AI: read from the text of a PDF by a language model; each fact keeps a short quote, and we "
+               "checked that the quote really is on the page it cites.")
+    bars([{**r, "method": common.METHOD_LABELS.get(r["method"], r["method"])}
+          for r in q.facts_by_type_method(conn, source)], "entity_type", color="method")
 with right:
     st.subheader("Entities per year")
     st.caption(f"By best date: publish date, else the date in the document, else PDF metadata. "
@@ -61,8 +66,9 @@ with left:
 with right:
     st.subheader("PDF document types (LLM)")
     bars(q.label_counts(conn, source, "document", "llm_doc_type"), "value", horizontal=True)
-    st.subheader("Skips by reason")
-    bars(q.skip_counts(conn, source), "reason", horizontal=True)
+    st.subheader("Skipped links in the last run, by reason")
+    st.caption("off_domain = a link to another website (we only crawl this site's pages, but download files from anywhere).")
+    bars(q.skip_counts(conn, source, o["last_run"]) if o["last_run"] else [], "reason", horizontal=True)
 
 runs = q.runs(conn, source)
 if runs:
