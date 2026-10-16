@@ -99,6 +99,15 @@ def test_prompt_teaches_the_view_with_examples(db):  # noqa: F811
     assert "current_facts(" in prompt and "GROUP BY" in prompt and "MAX(CASE WHEN field" in prompt
 
 
+def test_prompt_lists_run_stats_keys_skip_reasons_and_methods(db):  # noqa: F811
+    prompt = ask.Asker(FakeChat(), db, docs={}, source="demo").system
+    assert "runs.stats_json keys: requests, status_counts" in prompt  # real keys from the latest run
+    assert "skips.reason values: http_404, off_domain" in prompt  # real reasons, not guessed ones like '404'
+    assert "'parse' = copied" in prompt and "'llm' = read from a PDF" in prompt
+    assert "compare with = 0, not = '0'" in prompt  # json_extract(false) is the integer 0
+    assert "'parse' means copied" in ask.ANSWER_PROMPT  # the answer step names the methods correctly too
+
+
 def test_huge_values_are_refused_and_cells_trimmed(db):  # noqa: F811
     with pytest.raises(sqlite3.Error):
         ask.run_sql(db, "SELECT zeroblob(50000000)")

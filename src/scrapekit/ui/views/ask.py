@@ -44,6 +44,11 @@ GENERIC_EXAMPLES = (
     "Which hosts did we download files from, and how many from each?",
     "Which facts changed between runs?",
     "Why were links skipped in the last run, by reason?",
+    "How many facts were copied, and how many were read by AI?",
+    "Which PDFs have the most pages?",
+    "Which PDFs are scans with no text layer?",
+    "How do the runs compare in requests, 304s and cost?",
+    "Which links were dead (404) in the last run, and which page linked to them?",
 )
 config = SOURCES.get(source)
 examples = [*(config.ask_examples if config else ()), *GENERIC_EXAMPLES]

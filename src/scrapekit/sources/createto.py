@@ -77,6 +77,11 @@ CREATETO = Source(
         "How many projects are in each phase?",
         "Which projects are in Delivery and Construction, with their address and ward?",
         "Which PDFs are board minutes from 2024 or later?",
+        "How many projects are in each ward?",
+        "Which projects include affordable housing, and what phase is each in?",
+        "Which news items mention a project, and which projects?",
+        "What are the 10 most recent news items, with their topics?",
+        "Which projects have no address on their page?",
     ),
     field_docs={
         "project.name": "Project name as shown on the site.",
