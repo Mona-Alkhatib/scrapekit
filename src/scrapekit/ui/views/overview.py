@@ -37,10 +37,8 @@ def bars(rows: list[dict], x: str, y: str = "n", color: str | None = None, horiz
 
 left, right = st.columns(2)
 with left:
-    st.subheader("Facts by entity type, and how they were found")
-    st.caption("Rules: copied exactly from the page's own data or the PDF file's properties; no AI, free. "
-               "AI: read from the text of a PDF by a language model; each fact keeps a short quote, and we "
-               "checked that the quote really is on the page it cites.")
+    st.subheader("Facts: copied or read by AI")
+    st.caption(common.METHOD_EXPLAINED)
     bars([{**r, "method": common.METHOD_LABELS.get(r["method"], r["method"])}
           for r in q.facts_by_type_method(conn, source)], "entity_type", color="method")
 with right:

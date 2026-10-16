@@ -11,9 +11,8 @@ st.title("Data dictionary")
 conn, source = common.require_data()
 docs = field_docs(SOURCES.get(source))
 st.caption("Each fact is one field of one thing (a project, news item, document or page). "
-           "How it was found: Rules = copied exactly from the page's own data or the PDF file's properties (no AI). "
-           "AI = read from the PDF's text by a language model, with a quote checked on the cited page. "
            "Coverage = share of things of that type that have the field.")
+st.caption(common.METHOD_EXPLAINED)
 
 stats = q.field_stats(conn, source)
 for kind in sorted({s["entity_type"] for s in stats}):

@@ -13,7 +13,14 @@ from . import queries as q
 
 DB_ENV = "SCRAPEKIT_UI_DB"
 # How a fact was found, in plain words (the database stores "parse" or "llm").
-METHOD_LABELS = {"parse": "Rules (exact, no AI)", "llm": "AI from PDF text (quote checked)"}
+METHOD_LABELS = {"parse": "Copied", "llm": "Read by AI"}
+METHOD_EXPLAINED = (
+    "**Copied:** taken exactly from the website's own data or the PDF's file details. "
+    "**Read by AI:** found by AI in the PDF text, and checked against the sentence it came from.  \n"
+    "Projects, news and pages: all copied. Their data is already structured, so no AI is needed. "
+    "Documents (PDFs): some copied (page count, dates), some read by AI (summary, key facts), "
+    "and every AI fact is checked against the page."
+)
 MAX_INLINE_PDF_BYTES = 15_000_000  # bigger PDFs are slow to embed in the browser; offer download only
 
 

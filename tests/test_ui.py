@@ -237,7 +237,7 @@ def test_facts_filter_by_method(db):
     at = AppTest.from_file(str(UI / "views" / "facts.py"), default_timeout=30).run()
     at.selectbox[2].set_value("llm").run()
     assert not at.exception
-    assert set(at.dataframe[0].value["method"]) == {"AI from PDF text (quote checked)"}
+    assert set(at.dataframe[0].value["method"]) == {"Read by AI"}
 
 
 def test_no_streamlit_pages_folder():
@@ -354,6 +354,6 @@ def test_app_shows_one_database_without_a_picker(db):
 def test_method_shown_in_plain_words():
     from scrapekit.ui.common import _readable
 
-    assert _readable({"method": "parse"})["method"] == "Rules (exact, no AI)"
-    assert _readable({"method": "llm"})["method"] == "AI from PDF text (quote checked)"
+    assert _readable({"method": "parse"})["method"] == "Copied"
+    assert _readable({"method": "llm"})["method"] == "Read by AI"
 
