@@ -129,10 +129,12 @@ CREATE TABLE IF NOT EXISTS pdf_pages (
 
 
 def utcnow() -> str:
+    """Current UTC time as ISO text, to the second."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def connect(path: Path) -> sqlite3.Connection:
+    """Opens (and creates if needed) the SQLite database with every table."""
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
@@ -149,6 +151,7 @@ class Store:
         self.run_id = run_id
 
     def start_run(self, source: str, mode: str) -> None:
+        """Records that a run started."""
         self.conn.execute(
             "INSERT INTO runs (run_id, source, started_at, mode) VALUES (?, ?, ?, ?)",
             (self.run_id, source, utcnow(), mode),
@@ -156,6 +159,7 @@ class Store:
         self.conn.commit()
 
     def finish_run(self, stats_json: str) -> None:
+        """Records the run's end time and all its metrics as JSON."""
         self.conn.execute(
             "UPDATE runs SET finished_at = ?, stats_json = ? WHERE run_id = ?",
             (utcnow(), stats_json, self.run_id),
@@ -163,9 +167,11 @@ class Store:
         self.conn.commit()
 
     def get_document(self, url: str) -> sqlite3.Row | None:
+        """The documents row for a URL, or None if we never saw it."""
         return self.conn.execute("SELECT * FROM documents WHERE url = ?", (url,)).fetchone()
 
     def upsert_document(self, source: str, url: str, kind: str, host: str, discovered_from: str | None) -> None:
+        """Adds a URL to documents the first time we see it; later runs only update last_seen_run."""
         self.conn.execute(
             """
             INSERT INTO documents (url, source, kind, host, discovered_from, first_seen_run, last_seen_run)
@@ -184,6 +190,7 @@ class Store:
         content_type: str | None,
         content_hash: str | None,
     ) -> None:
+        """Stores the latest HTTP status, ETag, Last-Modified, content type and content hash for a URL."""
         # On a 304 we keep the previous validators and hash.
         self.conn.execute(
             """
@@ -210,18 +217,21 @@ class Store:
         return cur.rowcount == 1
 
     def latest_snapshot_path(self, url: str) -> str | None:
+        """Path of the newest saved copy of a URL, or None."""
         row = self.conn.execute(
             "SELECT path FROM snapshots WHERE url = ? ORDER BY id DESC LIMIT 1", (url,)
         ).fetchone()
         return row["path"] if row else None
 
     def add_skip(self, url: str, reason: str, detail: str | None = None) -> None:
+        """Logs one skipped or failed URL with its reason and detail."""
         self.conn.execute(
             "INSERT INTO skips (run_id, url, reason, detail, at) VALUES (?, ?, ?, ?, ?)",
             (self.run_id, url, reason, detail, utcnow()),
         )
 
     def add_link(self, src: str, dst: str) -> None:
+        """Records that page src links to URL dst."""
         self.conn.execute("INSERT OR IGNORE INTO links (src, dst) VALUES (?, ?)", (src, dst))
 
     # ---------- extraction ----------
@@ -240,6 +250,7 @@ class Store:
         ).fetchall()
 
     def already_extracted(self, url: str, content_hash: str, extractor: str) -> bool:
+        """True if this exact content was already processed by this extractor version."""
         row = self.conn.execute(
             "SELECT 1 FROM extractions WHERE url = ? AND content_hash = ? AND extractor = ?",
             (url, content_hash, extractor),
@@ -247,29 +258,34 @@ class Store:
         return row is not None
 
     def record_extraction(self, url: str, content_hash: str, extractor: str, status: str, detail: str | None = None) -> None:
+        """Remembers that an extractor processed this content (ok, failed or unsupported)."""
         self.conn.execute(
             "INSERT OR REPLACE INTO extractions VALUES (?, ?, ?, ?, ?, ?, ?)",
             (url, content_hash, extractor, status, detail, self.run_id, utcnow()),
         )
 
     def save_pdf_pages(self, content_hash: str, pages: list[str]) -> None:
+        """Stores a PDF's text page by page, keyed by content hash."""
         self.conn.executemany(
             "INSERT OR IGNORE INTO pdf_pages VALUES (?, ?, ?)",
             [(content_hash, i + 1, text) for i, text in enumerate(pages)],
         )
 
     def pdf_pages(self, content_hash: str) -> list[str]:
+        """A PDF's saved text, one string per page (page 1 first)."""
         rows = self.conn.execute(
             "SELECT text FROM pdf_pages WHERE content_hash = ? ORDER BY page_number", (content_hash,)
         ).fetchall()
         return [r["text"] for r in rows]
 
     def llm_cache_get(self, content_hash: str, model_key: str) -> sqlite3.Row | None:
+        """A saved LLM answer for this content, model and prompt version, or None."""
         return self.conn.execute(
             "SELECT * FROM llm_cache WHERE content_hash = ? AND model_key = ?", (content_hash, model_key)
         ).fetchone()
 
     def llm_cache_put(self, content_hash: str, model_key: str, response: str, tokens_in: int, tokens_out: int, cost: float) -> None:
+        """Saves a paid LLM answer with its tokens and cost."""
         self.conn.execute(
             "INSERT OR REPLACE INTO llm_cache VALUES (?, ?, ?, ?, ?, ?, ?)",
             (content_hash, model_key, response, tokens_in, tokens_out, cost, utcnow()),
@@ -328,4 +344,5 @@ class Store:
         return counts
 
     def commit(self) -> None:
+        """Writes pending changes to disk."""
         self.conn.commit()

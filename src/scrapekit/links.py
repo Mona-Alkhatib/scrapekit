@@ -1,4 +1,10 @@
-"""Finding links in a page and deciding what to do with each one."""
+"""Finding links in a page and deciding what to do with each one.
+
+normalize()     one spelling per URL: absolute, no #fragment, lowercase host, no trailing slash
+canonicalize()  alias hosts (www., http://) rewritten to the source's own address
+classify()      'page' (crawl it), 'file' (download it, any host) or a skip reason
+extract_links() every link in <a href> plus file URLs hidden inside embedded JSON
+"""
 
 import re
 from functools import lru_cache
@@ -42,6 +48,7 @@ def canonicalize(url: str, source: Source) -> str:
 
 
 def is_file_url(url: str, source: Source) -> bool:
+    """True if the URL path ends with one of the source's file extensions (.pdf, .docx ...)."""
     return PurePosixPath(urlparse(url).path).suffix.lower() in source.file_extensions
 
 

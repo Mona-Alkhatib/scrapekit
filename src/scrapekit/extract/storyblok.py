@@ -56,6 +56,7 @@ class Component:
 
 @dataclass(frozen=True)
 class StoryblokModel:
+    """A site's content model: which CMS components become which entities, and how to read their fields."""
     components: dict[str, Component]  # Storyblok component name -> how to read it
 
 
@@ -72,6 +73,7 @@ def richtext(node) -> str:
 
 
 def load_next_data(html: bytes) -> dict | None:
+    """The CMS record embedded in the page (<script id="__NEXT_DATA__">) as a dict, or None if absent."""
     match = NEXT_DATA_RE.search(html)
     if not match:
         return None
@@ -95,6 +97,7 @@ def _blank(value) -> bool:
 
 
 def extract(url: str, html: bytes, model: StoryblokModel | None = None) -> list[Fact]:
+    """Facts from a Storyblok page using the site's model; falls back to the generic extractor otherwise."""
     data = load_next_data(html)
     if data is None or model is None:
         return generic_html.extract(url, html)
@@ -108,6 +111,7 @@ def extract(url: str, html: bytes, model: StoryblokModel | None = None) -> list[
 
 
 def component_facts(c: Component, page: dict, content: dict, props: dict) -> list[Fact]:
+    """Turns one CMS record into facts, field by field, each with the JSON path it came from."""
     kind = c.entity_type
     key = page.get("slug") or page.get("full_slug", "")
     facts = [Fact(kind, key, "url_slug", page.get("full_slug"), _loc("page.full_slug"))]

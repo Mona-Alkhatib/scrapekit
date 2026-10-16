@@ -1,4 +1,8 @@
-"""Data dictionary: what every field means, how it was extracted, how often it is filled, and an example."""
+"""Data dictionary: what every field means, how it was extracted, how often it is filled, and an example.
+
+Descriptions come from extract.field_docs() (extractor modules + the Source's field_docs); coverage and
+examples come from queries.field_stats(), so they always match the data.
+"""
 
 import pandas as pd
 import streamlit as st

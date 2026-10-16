@@ -1,4 +1,7 @@
-"""Plain-English guide to the database tables, for engineers who want to query them directly."""
+"""Plain-English guide to the database tables, for engineers who want to query them directly.
+
+Shown on the Data dictionary page and given to the Ask AI model as part of its schema.
+"""
 
 TABLES = [
     ("runs", "One row per run.", "run_id, source, mode, started_at, finished_at (empty = did not finish), "

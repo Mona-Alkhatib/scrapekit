@@ -79,6 +79,7 @@ class UnsafeSql(ValueError):
 
 
 def check_sql(sql: str) -> str:
+    """Accepts one SELECT (or WITH ... SELECT) statement; raises UnsafeSql for anything else."""
     text = sql.strip().rstrip(";").strip()
     if ";" in text:
         raise UnsafeSql("Only one statement is allowed.")
@@ -164,6 +165,7 @@ ANSWER_SCHEMA = {"name": "answer", "strict": True, "schema": {
 
 @dataclass
 class AskResult:
+    """Everything about one question: the SQL, its rows, the answer, attempts, cost and any error."""
     question: str
     sql: str = ""
     explanation: str = ""
@@ -177,6 +179,8 @@ class AskResult:
 
 
 class Asker:
+    """The Ask AI agent for one database and source: question to SQL to rows to answer."""
+
     def __init__(self, llm, db_path: Path, docs: dict[str, str], source: str, max_attempts: int = MAX_ATTEMPTS):
         self.llm = llm
         self.db_path = Path(db_path)
@@ -197,6 +201,7 @@ class Asker:
         return data if isinstance(data, dict) else {}
 
     def ask(self, question: str, budget_left: float = DEFAULT_SESSION_BUDGET_USD) -> AskResult:
+        """Answers one question within the remaining budget; never raises, problems go into result.error."""
         result = AskResult(question)
         messages = [{"role": "system", "content": self.system}, {"role": "user", "content": question}]
         for attempt in range(1, self.max_attempts + 1):
@@ -235,10 +240,12 @@ class Asker:
 # only thing the UI writes. It is the audit trail of AI use: what was asked, which SQL ran, what it cost.
 
 def log_path(db_path: Path) -> Path:
+    """The question log file, next to the database."""
     return Path(db_path).parent / "ask_log.jsonl"
 
 
 def append_log(path: Path, result: AskResult, source: str) -> None:
+    """Adds one question to the log: time, source, question, SQL, rows, attempts, cost, error."""
     from datetime import datetime, timezone
 
     entry = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": source,
@@ -249,6 +256,7 @@ def append_log(path: Path, result: AskResult, source: str) -> None:
 
 
 def read_log(path: Path) -> list[dict]:
+    """Every logged question; unreadable lines are skipped."""
     if not Path(path).exists():
         return []
     entries = []
@@ -261,6 +269,7 @@ def read_log(path: Path) -> list[dict]:
 
 
 def log_totals(path: Path, source: str | None = None) -> dict:
+    """How many questions were asked and what they cost, optionally for one source."""
     entries = [e for e in read_log(path) if source is None or e.get("source") in (None, source)]
     return {"questions": len(entries), "cost_usd": round(sum(float(e.get("cost_usd") or 0) for e in entries), 6)}
 
@@ -278,6 +287,7 @@ class OpenRouterChat:
         self.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key, max_retries=1, timeout=60)
 
     def complete(self, messages: list[dict], schema: dict) -> tuple[dict, float]:
+        """One chat call with a strict JSON schema; returns (answer dict, real cost in USD)."""
         resp = self.client.chat.completions.create(
             model=self.model, temperature=0, messages=messages,
             response_format={"type": "json_schema", "json_schema": schema},

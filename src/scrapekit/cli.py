@@ -31,6 +31,7 @@ from .sources import SOURCES, Source, get_source
 
 
 def new_run_id() -> str:
+    """A sortable, unique run id: UTC time plus 4 random hex characters, e.g. 20261014T214940Z-d148."""
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(2)
 
 
@@ -40,6 +41,7 @@ async def run_pipeline(
     llm_budget: float = DEFAULT_RUN_BUDGET_USD, llm_dry_run: bool = False,
     transport=None,
 ) -> RunStats:
+    """One run: crawl and/or extract for one source, then write the run's metrics to the database and runs/."""
     mode = "+".join(name for name, on in (("crawl", crawl), ("extract", extract)) if on)
     run_id = new_run_id()
     stats = RunStats(run_id=run_id, mode=f"{mode}:{source.name}")
@@ -63,6 +65,7 @@ async def run_pipeline(
 
 
 async def crawl(settings: Settings, source: Source) -> RunStats:
+    """Download only (no extraction). Used by tests."""
     return await run_pipeline(settings, source, crawl=True, extract=False)
 
 
@@ -76,6 +79,7 @@ async def _closing(coro, llm: OpenRouterExtractor | None):
 
 
 def main() -> None:
+    """Parses the command line and dispatches: sources, run / crawl / extract, export, variants, ui."""
     parser = argparse.ArgumentParser(prog="scrapekit", description="Turn public websites and their files into data.")
     sub = parser.add_subparsers(dest="command", required=True)
 

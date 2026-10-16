@@ -1,4 +1,7 @@
-"""Works on any HTML page: title, description, headings, and main text. The fallback for every source."""
+"""Works on any HTML page: title, description, headings, and main text. The fallback for every source.
+
+Each page becomes one 'page' entity whose id is its URL path (plus the query string, if any).
+"""
 
 from urllib.parse import urlparse
 
@@ -25,6 +28,7 @@ def page_key(url: str) -> str:
 
 
 def main_text(tree: LexborHTMLParser) -> str:
+    """Readable text of the page: inside <main> (else <body>), without menus, footers and scripts."""
     root = tree.css_first("main") or tree.body
     if root is None:
         return ""
@@ -34,6 +38,7 @@ def main_text(tree: LexborHTMLParser) -> str:
 
 
 def extract(url: str, html: bytes, options=None) -> list[Fact]:  # needs no options
+    """Facts any HTML page has: title, meta description, h1/h2 headings and main text."""
     try:
         tree = LexborHTMLParser(html.decode("utf-8", errors="replace"))
     except Exception as exc:  # lexbor raises plain errors on broken input

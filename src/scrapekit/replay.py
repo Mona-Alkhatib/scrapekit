@@ -20,14 +20,18 @@ from .links import normalize
 
 
 class ReplayTransport(httpx.AsyncBaseTransport):
+    """A fake web server built from saved files: serves them with ETags and 304s, unknown URLs get 404."""
+
     def __init__(self, fixture_dir: Path):
         self.dir = fixture_dir
         self.manifest = {normalize(u, u): v for u, v in json.loads((fixture_dir / "manifest.json").read_text()).items()}
 
     def urls(self) -> set[str]:
+        """Every URL the fixture can serve, used as the run's allowlist."""
         return set(self.manifest)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """Answers one request from the fixture folder, like the real site would."""
         entry = self.manifest.get(normalize(str(request.url), str(request.url)))
         if entry is None:
             return httpx.Response(404, request=request)

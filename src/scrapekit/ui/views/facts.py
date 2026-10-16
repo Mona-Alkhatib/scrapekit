@@ -1,4 +1,7 @@
-"""Facts: search every value we extracted, filter by field, method and run, and see where each came from."""
+"""Facts: search every value we extracted, filter by field, method and run, and see where each came from.
+
+Data: queries.facts(); selecting a row shows common.provenance() and the fact's history.
+"""
 
 import streamlit as st
 
@@ -6,6 +9,7 @@ from scrapekit.ui import common, queries as q
 
 st.title("Facts")
 conn, source = common.require_data()
+# 1. Filters. "Created in run" finds what a run added or changed; turning off "current only" shows history.
 c1, c2, c3, c4 = st.columns(4)
 kind = c1.selectbox("Entity type", [""] + q.entity_types(conn, source), format_func=lambda t: t or "all")
 field = c2.selectbox("Field", [""] + q.fact_fields(conn, source), format_func=lambda f: f or "all")
@@ -18,6 +22,7 @@ rows = q.facts(conn, source, entity_type=kind or None, field=field or None, meth
                run_id=run_id or None, current_only=current_only, search=search or None)
 st.caption(f"{len(rows)} facts (max 1,000). Select one for its source and history.")
 picked = common.table(rows, "facts", columns=["id", "entity_type", "entity_key", "field", "value", "method", "locator", "valid_from", "valid_to"])
+# 2. A fact is selected: where it came from, and its earlier values if it changed.
 if picked:
     common.provenance(conn, picked)
     chain = q.fact_history(conn, picked["id"])

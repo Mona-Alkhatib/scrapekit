@@ -73,6 +73,7 @@ def system_prompt(publisher: str, focus: str | None = None) -> str:
 
 
 def response_schema(body_example: str) -> dict:
+    """The strict JSON schema the model must answer in: document fields plus up to 15 facts with page and quote."""
     return {
         "name": "document_facts",
         "strict": True,
@@ -107,6 +108,7 @@ def response_schema(body_example: str) -> dict:
 
 @dataclass
 class LlmResult:
+    """One paid answer: the data, tokens, real cost, and which pages were sent."""
     data: dict
     model: str
     input_tokens: int
@@ -207,6 +209,8 @@ def verify_facts(facts: list[dict], pages: list[str]) -> tuple[list[dict], list[
 
 
 class OpenRouterExtractor:
+    """Calls the LLM through OpenRouter for one PDF at a time."""
+
     def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None):
         key = api_key or os.environ.get("OPENROUTER_API_KEY")
         if not key:
@@ -221,6 +225,7 @@ class OpenRouterExtractor:
         return f"{self.model}|v{PROMPT_VERSION}"
 
     async def extract(self, url: str, pages: list[str], prompt: str, schema: dict) -> LlmResult:
+        """Sends one PDF's page-tagged text with the prompt and schema; returns the answer and its real cost."""
         text, truncated, pages_sent = build_document_text(pages)
         resp = await self.client.chat.completions.create(
             model=self.model,
@@ -251,4 +256,5 @@ class OpenRouterExtractor:
         )
 
     async def close(self) -> None:
+        """Closes the HTTP client."""
         await self.client.close()

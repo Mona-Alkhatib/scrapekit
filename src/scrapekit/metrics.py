@@ -1,4 +1,8 @@
-"""Counters for one run, plus the JSON and Markdown summaries we hand in."""
+"""Counters for one run, plus the JSON and Markdown summaries we hand in.
+
+The crawler and extraction stage increment these as they go; cli.run_pipeline writes them to
+runs/<run_id>.md and .json and to the runs table (stats_json), which the UI reads.
+"""
 
 import json
 import time
@@ -9,6 +13,7 @@ from pathlib import Path
 
 @dataclass
 class RunStats:
+    """Every counter for one run; becomes the run report and runs.stats_json."""
     run_id: str
     mode: str
     started: float = field(default_factory=time.monotonic)
@@ -43,9 +48,11 @@ class RunStats:
     records_removed: int = 0
 
     def finish(self) -> None:
+        """Stops the clock."""
         self.duration_seconds = round(time.monotonic() - self.started, 1)
 
     def to_dict(self) -> dict:
+        """The metrics as a plain dict (for JSON)."""
         d = {k: v for k, v in self.__dict__.items() if k != "started"}
         d["status_counts"] = {str(k): v for k, v in sorted(self.status_counts.items(), key=str)}
         d["skips"] = dict(self.skips.most_common())
@@ -53,6 +60,7 @@ class RunStats:
         return d
 
     def write(self, runs_dir: Path) -> Path:
+        """Writes runs/<run_id>.json and .md."""
         runs_dir.mkdir(parents=True, exist_ok=True)
         (runs_dir / f"{self.run_id}.json").write_text(json.dumps(self.to_dict(), indent=2))
         md = runs_dir / f"{self.run_id}.md"
@@ -60,6 +68,7 @@ class RunStats:
         return md
 
     def to_markdown(self) -> str:
+        """The run report as a Markdown table, also printed at the end of a run."""
         d = self.to_dict()
         lines = [
             f"# Run {self.run_id} ({self.mode})",

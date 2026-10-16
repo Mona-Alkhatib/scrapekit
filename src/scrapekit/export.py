@@ -65,6 +65,7 @@ WINDOW_YEARS = 5
 
 
 def best_date(fields: dict) -> tuple[str | None, str | None]:
+    """The most reliable date for an entity (publish date, else the document's own date, else PDF metadata)."""
     for name in DATE_FIELDS:
         value = (fields.get(name) or {}).get("value")
         if isinstance(value, str) and len(value) >= 10 and value[:4].isdigit():
@@ -73,6 +74,7 @@ def best_date(fields: dict) -> tuple[str | None, str | None]:
 
 
 def within_window(day: str | None, today: date) -> bool | None:
+    """True if the date is within the last 5 years, None if there is no usable date."""
     if day is None:
         return None
     try:
@@ -92,6 +94,7 @@ def _write(path: Path, rows) -> int:
 
 
 def export_source(store: Store, source: str, out_dir: Path) -> dict[str, int]:
+    """Writes every JSONL file and SCHEMA.md for one source. Returns how many rows went into each file."""
     out = out_dir / source
     out.mkdir(parents=True, exist_ok=True)
     conn = store.conn
@@ -128,6 +131,7 @@ def export_source(store: Store, source: str, out_dir: Path) -> dict[str, int]:
             ent["linked_documents"] = sorted(links_out.get(ent["source_url"], []))
 
     def facts():
+        """Every fact row for the source, in insertion order, with the value decoded from JSON."""
         for r in conn.execute("SELECT * FROM facts WHERE source = ? ORDER BY id", (source,)):
             row = dict(r)
             row["value"] = json.loads(row["value"])

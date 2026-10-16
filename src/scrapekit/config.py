@@ -1,4 +1,7 @@
-"""Runtime settings shared by every source. Site-specific settings live in `sources/`."""
+"""Runtime settings shared by every source. Site-specific settings live in `sources/`.
+
+Command line flags (--data-dir, --delay, --revalidate-all) override these per run.
+"""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -6,6 +9,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Settings:
+    """Settings shared by every source: where data goes, politeness, size and retry limits."""
     user_agent: str = "scrapekit/0.1 (research crawler; polite, 1 req/s per host)"
     data_dir: Path = Path("data")
     runs_dir: Path = Path("runs")
@@ -18,8 +22,10 @@ class Settings:
 
     @property
     def db_path(self) -> Path:
+        """The SQLite file inside the data folder."""
         return self.data_dir / "scrapekit.db"
 
     @property
     def raw_dir(self) -> Path:
+        """The folder for raw page and file copies inside the data folder."""
         return self.data_dir / "raw"

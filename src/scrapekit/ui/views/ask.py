@@ -1,4 +1,8 @@
-"""Ask AI: ask a question in plain English; the model writes the SQL, we run it read-only, and show both."""
+"""Ask AI: ask a question in plain English; the model writes the SQL, we run it read-only, and show both.
+
+Flow: question -> ask.Asker (SQL, safe run, answer) -> shown with SQL, rows and cost -> appended to
+ask_log.jsonl. Spend per browser session is capped at ask.DEFAULT_SESSION_BUDGET_USD.
+"""
 
 import os
 
@@ -16,12 +20,14 @@ st.caption("The model writes one SQL query, the query runs on a separate connect
            "and the model summarizes the rows. You always see the SQL and the rows, so you can check the answer. "
            f"Each question costs about \\$0.001; this session stops at \\${ask.DEFAULT_SESSION_BUDGET_USD:.2f}.")
 
+# 1. Without an API key the page explains how to add one and stops; other pages still work.
 load_dotenv()
 if not os.environ.get("OPENROUTER_API_KEY"):
     st.info("Ask AI needs an OpenRouter key: put OPENROUTER_API_KEY=... in the .env file at the repo root "
             "and restart `scrapekit ui`. Every other page works without it.")
     st.stop()
 
+# 2. Spend and answers for this browser session (session_state survives reruns, not page refreshes).
 spent = st.session_state.setdefault("ai_spent", 0.0)
 history = st.session_state.setdefault("ai_history", [])
 budget_left = ask.DEFAULT_SESSION_BUDGET_USD - spent
@@ -32,6 +38,7 @@ MAX_HISTORY = 20
 md = ask.plain_markdown  # model and user text: no links, images or math, shown exactly as written
 
 
+# 3. Example questions: the source's own (from its config) first, then generic ones.
 GENERIC_EXAMPLES = (
     "How many entities of each type do we have?",
     "Which hosts did we download files from, and how many from each?",
@@ -43,6 +50,7 @@ examples = [*(config.ask_examples if config else ()), *GENERIC_EXAMPLES]
 picked = st.pills("Examples", examples, selection_mode="single")
 question = st.text_input("Your question", value=picked or "", placeholder="Ask anything about the data")
 
+# 4. Ask: the agent writes SQL, runs it safely, answers; the cost is added and the question logged.
 if st.button("Ask", type="primary", disabled=not question or budget_left <= 0):
     with st.spinner("Writing and running the query ..."):
         try:
@@ -59,6 +67,7 @@ if st.button("Ask", type="primary", disabled=not question or budget_left <= 0):
     del history[MAX_HISTORY:]  # keep memory bounded
     st.rerun()
 
+# 5. Answers, newest first: the answer, the SQL that produced it, the rows, attempts and cost.
 for i, r in enumerate(history):
     with st.container(border=True):
         st.markdown(f"**Q: {md(r.question)}**")
@@ -75,6 +84,7 @@ for i, r in enumerate(history):
             st.caption(f"{len(r.rows)} rows{' (capped at 500)' if r.truncated else ''}.")
         st.caption(f"Attempts: {r.attempts}. Cost: \\${r.cost_usd:.4f} (actual, from OpenRouter).")
 
+# 6. Every question ever asked on this data (ask_log.jsonl), with its SQL and cost.
 past = ask.read_log(ask.log_path(common.db_path()))
 if past:
     total = ask.log_totals(ask.log_path(common.db_path()), source)

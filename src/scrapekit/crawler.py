@@ -37,12 +37,15 @@ SITEMAP_NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
 
 @dataclass
 class Job:
+    """One URL waiting in the queue, whether it is a page or a file, and where it was found."""
     url: str
     kind: str  # 'page' or 'file'
     found_on: str | None
 
 
 class Crawler:
+    """Crawls one source: sitemap + link walk with a few parallel workers, saving copies and logging skips."""
+
     def __init__(self, settings: Settings, source: Source, store: Store, fetcher: Fetcher, stats: RunStats):
         self.settings = settings
         self.source = source
@@ -59,6 +62,7 @@ class Crawler:
     # ---------- public ----------
 
     async def run(self) -> None:
+        """Seeds the queue, starts the workers, and waits until every queued URL is processed."""
         # Seed: start URLs plus the sitemap. Link walking (follow_links) finds pages the sitemap misses.
         for start in self.source.start_urls:
             self.enqueue(normalize(start, start), "page", None)
@@ -75,6 +79,7 @@ class Crawler:
     # ---------- queue ----------
 
     def enqueue(self, url: str, kind: str, found_on: str | None) -> None:
+        """Adds a URL to the queue once per run; pages beyond the source's max_pages are skipped with a reason."""
         # Each URL is queued once per run, however many pages link to it.
         if url in self.seen:
             return
@@ -87,6 +92,7 @@ class Crawler:
         self.queue.put_nowait(Job(url, kind, found_on))
 
     async def worker(self) -> None:
+        """Takes jobs off the queue forever; an error on one URL is logged as a skip and never stops the crawl."""
         while True:
             job = await self.queue.get()
             try:
@@ -110,6 +116,7 @@ class Crawler:
     # ---------- robots + sitemap ----------
 
     async def allowed(self, url: str) -> bool:
+        """True if this host's robots.txt allows our user agent to fetch the URL (robots.txt fetched once per host)."""
         host = urlparse(url).netloc
         # One lock per host, so parallel workers fetch robots.txt once, not once each.
         async with self.robots_locks.setdefault(host, asyncio.Lock()):
@@ -122,6 +129,7 @@ class Crawler:
         return self.robots[host].can_fetch(self.settings.user_agent, url)
 
     async def sitemap_urls(self) -> list[str]:
+        """All page URLs listed in the source's sitemaps, following sitemap index files."""
         todo, urls = list(self.source.sitemap_urls), []
         while todo:
             result = await self.fetcher.fetch(todo.pop())
@@ -144,6 +152,7 @@ class Crawler:
     # ---------- one URL ----------
 
     async def process(self, job: Job) -> None:
+        """Handles one URL: robots check, immutable shortcut, conditional GET, save the copy, follow links."""
         # 1. Public content only: respect robots.txt on every host, including file hosts.
         if not await self.allowed(job.url):
             self.skip(job.url, "robots_disallowed")
@@ -199,6 +208,7 @@ class Crawler:
             self.follow_links(job.url, body)
 
     def is_immutable(self, url: str) -> bool:
+        """True if the source says this file URL never changes (a new version would get a new URL)."""
         return any(re.search(p, url) for p in self.source.immutable_url_patterns)
 
     def handle_failure(self, job: Job, result: FetchResult) -> bytes | None:
@@ -214,10 +224,12 @@ class Crawler:
         return None
 
     def count(self, kind: str, what: str) -> None:
+        """Adds one to a page or file counter in the run metrics, e.g. files_unchanged."""
         name = f"{'pages' if kind == 'page' else 'files'}_{what}"
         setattr(self.stats, name, getattr(self.stats, name) + 1)
 
     def follow_links(self, page_url: str, html: bytes) -> None:
+        """Queues every page or file link in a page and logs every other link as a skip with its reason."""
         # Links come from <a href> and from JSON embedded in the page (links.py).
         links, rejected = extract_links(html, page_url, self.source)
         for href in rejected:

@@ -15,6 +15,7 @@ from typing import Callable
 
 @dataclass(frozen=True)
 class Fact:
+    """One field of one entity, with where it came from (locator, optional excerpt) and how (rules or LLM)."""
     entity_type: str  # project, news, page, document
     entity_key: str  # stable id inside the source: a slug or the file URL
     field: str
@@ -24,6 +25,7 @@ class Fact:
     method: str = "parse"  # parse (rules, free) or llm (paid)
 
     def value_json(self) -> str:
+        """The value as stable JSON text, so equal values compare equal in the database."""
         return json.dumps(self.value, ensure_ascii=False, sort_keys=True)
 
 
@@ -48,10 +50,12 @@ def field_docs(source) -> dict[str, str]:
 
 
 def describe(docs: dict[str, str], entity_type: str, field: str) -> str | None:
+    """The description of one field: the entity-specific one if there is one, else the generic one."""
     return docs.get(f"{entity_type}.{field}") or docs.get(field)
 
 
 def get_page_extractor(name: str) -> PageExtractor:
+    """The page extractor function for a name in a Source config (generic or storyblok)."""
     from . import generic_html, storyblok
 
     extractors = {"generic": generic_html.extract, "storyblok": storyblok.extract}

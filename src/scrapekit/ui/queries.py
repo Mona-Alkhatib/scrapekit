@@ -15,6 +15,7 @@ FAILURE_REASONS = ("network_error", "parse_error", "llm_error", "internal_error"
 
 
 def open_db(path: Path) -> sqlite3.Connection:
+    """Opens the database read-only: any write raises an error."""
     conn = sqlite3.connect(f"file:{Path(path).resolve()}?mode=ro", uri=True, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
@@ -30,12 +31,14 @@ def _like(text: str) -> str:
 
 
 def sources(conn) -> list[str]:
+    """Source names that have runs in this database."""
     return [r["source"] for r in _rows(conn, "SELECT DISTINCT source FROM runs ORDER BY source")]
 
 
 # ---------- runs ----------
 
 def run_status(finished_at: str | None, stats: dict) -> str:
+    """ok, ok with failures (an http_* skip or a network, parse or LLM error), or incomplete (never finished)."""
     if not finished_at:
         return "incomplete"
     skips = stats.get("skips") or {}
@@ -62,10 +65,12 @@ def _run_row(r: dict) -> dict:
 
 
 def runs(conn, source: str) -> list[dict]:
+    """Every run of a source, newest first, with flat metric columns and the full stats dict."""
     return [_run_row(r) for r in _rows(conn, "SELECT * FROM runs WHERE source = ? ORDER BY run_id DESC", (source,))]
 
 
 def run(conn, run_id: str) -> dict | None:
+    """One run by id, in the same shape as runs()."""
     rows = _rows(conn, "SELECT * FROM runs WHERE run_id = ?", (run_id,))
     return _run_row(rows[0]) if rows else None
 
@@ -99,6 +104,7 @@ def run_fact_changes(conn, run_id: str, limit: int = 1000) -> list[dict]:
 # ---------- skips ----------
 
 def skip_counts(conn, source: str, run_id: str | None = None) -> list[dict]:
+    """Number of skips per reason, for a source and optionally one run."""
     sql = "SELECT s.reason, COUNT(*) AS n FROM skips s JOIN runs r ON r.run_id = s.run_id WHERE r.source = ?"
     params: list = [source]
     if run_id:
@@ -108,6 +114,7 @@ def skip_counts(conn, source: str, run_id: str | None = None) -> list[dict]:
 
 
 def skips(conn, source: str, reason=None, run_id=None, search=None, limit: int = 1000) -> list[dict]:
+    """Skipped URLs with reason and detail, filtered by reason, run and URL text; newest first."""
     sql = ("SELECT s.run_id, s.reason, s.url, s.detail, s.at FROM skips s JOIN runs r ON r.run_id = s.run_id"
            " WHERE r.source = ?")
     params: list = [source]
@@ -129,11 +136,13 @@ NAME_FIELDS = ("name", "title", "llm_title", "pdf_title", "file_name_title")
 
 
 def entity_types(conn, source: str) -> list[str]:
+    """The entity types present (project, news, document, page ...)."""
     return [r["entity_type"] for r in _rows(
         conn, "SELECT DISTINCT entity_type FROM facts WHERE source = ? ORDER BY 1", (source,))]
 
 
 def entities(conn, source: str, entity_type=None, search=None, limit: int = 500) -> list[dict]:
+    """One row per entity with a display name and fact count; search matches the key or any value."""
     name = "COALESCE(" + ", ".join(
         f"MAX(CASE WHEN field = '{f}' THEN json_extract(value, '$') END)" for f in NAME_FIELDS) + ")"
     sql = (f"SELECT entity_type, entity_key, {name} AS name, MIN(source_url) AS source_url, COUNT(*) AS facts"
@@ -151,6 +160,7 @@ def entities(conn, source: str, entity_type=None, search=None, limit: int = 500)
 
 
 def entity_facts(conn, source: str, entity_type: str, entity_key: str, history: bool = False) -> list[dict]:
+    """All facts of one entity: current only, or with history (replaced values) too."""
     sql = "SELECT * FROM facts WHERE source = ? AND entity_type = ? AND entity_key = ?"
     if not history:
         sql += " AND valid_to IS NULL"
@@ -158,11 +168,13 @@ def entity_facts(conn, source: str, entity_type: str, entity_key: str, history: 
 
 
 def fact_fields(conn, source: str) -> list[str]:
+    """Every field name present for the source."""
     return [r["field"] for r in _rows(conn, "SELECT DISTINCT field FROM facts WHERE source = ? ORDER BY 1", (source,))]
 
 
 def facts(conn, source: str, entity_type=None, field=None, method=None, run_id=None, source_url=None,
           current_only=True, search=None, limit: int = 1000) -> list[dict]:
+    """Fact rows filtered by type, field, method, run, source URL, current-only and text search."""
     sql = "SELECT * FROM facts WHERE source = ?"
     params: list = [source]
     for col, val in (("entity_type", entity_type), ("field", field), ("method", method), ("run_id", run_id),
@@ -179,6 +191,7 @@ def facts(conn, source: str, entity_type=None, field=None, method=None, run_id=N
 
 
 def fact(conn, fact_id: int) -> dict | None:
+    """One fact by id, or None."""
     rows = _rows(conn, "SELECT * FROM facts WHERE id = ?", (fact_id,))
     return rows[0] if rows else None
 
@@ -196,10 +209,12 @@ def fact_history(conn, fact_id: int) -> list[dict]:
 # ---------- pages and files ----------
 
 def hosts(conn, source: str) -> list[str]:
+    """Every host we saw URLs on."""
     return [r["host"] for r in _rows(conn, "SELECT DISTINCT host FROM documents WHERE source = ? ORDER BY 1", (source,))]
 
 
 def documents(conn, source: str, kind=None, host=None, saved=None, search=None, limit: int = 1000) -> list[dict]:
+    """One row per URL with kind, host, status, whether a copy is saved, versions and size."""
     sql = """SELECT d.url, d.kind, d.host, d.last_status, d.current_hash IS NOT NULL AS saved,
                     (SELECT COUNT(*) FROM snapshots s WHERE s.url = d.url) AS versions,
                     (SELECT bytes FROM snapshots s WHERE s.url = d.url AND s.content_hash = d.current_hash) AS bytes,
@@ -219,29 +234,35 @@ def documents(conn, source: str, kind=None, host=None, saved=None, search=None, 
 
 
 def document(conn, url: str) -> dict | None:
+    """The documents row for one URL, or None."""
     rows = _rows(conn, "SELECT * FROM documents WHERE url = ?", (url,))
     return rows[0] if rows else None
 
 
 def snapshots(conn, url: str) -> list[dict]:
+    """Every saved version of a URL, newest first."""
     return _rows(conn, "SELECT * FROM snapshots WHERE url = ? ORDER BY id DESC", (url,))
 
 
 def links_to(conn, url: str) -> list[str]:
+    """Pages that link to this URL."""
     return [r["src"] for r in _rows(conn, "SELECT src FROM links WHERE dst = ? ORDER BY src", (url,))]
 
 
 def links_from(conn, url: str) -> list[str]:
+    """URLs that this page links to."""
     return [r["dst"] for r in _rows(conn, "SELECT dst FROM links WHERE src = ? ORDER BY dst", (url,))]
 
 
 def url_skips(conn, url: str) -> list[dict]:
+    """Every skip recorded for this exact URL."""
     return _rows(conn, "SELECT run_id, reason, detail, at FROM skips WHERE url = ? ORDER BY id DESC", (url,))
 
 
 # ---------- provenance ----------
 
 def pdf_page_text(conn, content_hash: str, page: int) -> str | None:
+    """The saved text of one PDF page, or None."""
     rows = _rows(conn, "SELECT text FROM pdf_pages WHERE content_hash = ? AND page_number = ?", (content_hash, page))
     return rows[0]["text"] if rows else None
 
@@ -276,6 +297,7 @@ DATE_FIELDS = ("first_published_at", "llm_document_date", "pdf_created")
 
 
 def overview(conn, source: str) -> dict:
+    """Headline numbers: entities, facts, saved pages and files, last run's skips, total LLM cost of runs."""
     one = lambda sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731
     # Each run logs the same skipped links again, so skips are counted for the latest finished run.
     last = one("SELECT MAX(run_id) FROM runs WHERE source = ? AND finished_at IS NOT NULL", source)
@@ -295,6 +317,7 @@ def overview(conn, source: str) -> dict:
 
 
 def facts_by_type_method(conn, source: str) -> list[dict]:
+    """Current facts counted by entity type and how they were found."""
     return _rows(conn, """SELECT entity_type, method, COUNT(*) AS n FROM facts
                           WHERE source = ? AND valid_to IS NULL GROUP BY 1, 2 ORDER BY 1, 2""", (source,))
 
@@ -308,6 +331,7 @@ def label_counts(conn, source: str, entity_type: str, field: str) -> list[dict]:
 
 
 def files_per_host(conn, source: str) -> list[dict]:
+    """Saved files counted by host."""
     return _rows(conn, """SELECT host, COUNT(*) AS n FROM documents
                           WHERE source = ? AND kind = 'file' AND current_hash IS NOT NULL
                           GROUP BY host ORDER BY n DESC""", (source,))

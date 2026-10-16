@@ -36,10 +36,12 @@ EXTRACTOR_VERSIONS = {"generic": 2, "storyblok": 3, "pdf": 1}  # 2 / 3: query st
 
 
 def extractor_id(name: str) -> str:
+    """Extractor name plus its version, e.g. storyblok@3, stored so unchanged content is not re-extracted."""
     return f"{name}@{EXTRACTOR_VERSIONS[name]}"
 
 
 def run_rules(source: Source, store: Store, stats: RunStats) -> None:
+    """Pass 1 (free): rule-based extraction of every saved page and PDF whose content is new."""
     page_extract = get_page_extractor(source.page_extractor)
 
     for doc in store.documents_to_extract(source.name):
@@ -88,10 +90,12 @@ def run_rules(source: Source, store: Store, stats: RunStats) -> None:
 
 
 class BudgetReached(Exception):
+    """Raised internally when the run's LLM spend reaches its cap; the document is retried next run."""
     pass
 
 
 def count_entities(source: Source, store: Store, stats: RunStats) -> None:
+    """Counts entities with current facts for the run report."""
     stats.entities = store.conn.execute(
         "SELECT COUNT(DISTINCT entity_type || ':' || entity_key) FROM facts WHERE source = ? AND valid_to IS NULL",
         (source.name,),
@@ -103,6 +107,7 @@ async def run_extract(
     llm_limit: int | None = None, llm_concurrency: int = 8,
     llm_budget: float = DEFAULT_RUN_BUDGET_USD, llm_dry_run: bool = False,
 ) -> None:
+    """Stage 2 of a run: rules on everything, then the LLM on PDFs if a client was given."""
     run_rules(source, store, stats)
     if llm is not None:
         await run_llm(source, store, stats, llm, llm_limit, llm_concurrency, llm_budget, llm_dry_run)
@@ -121,6 +126,7 @@ def _page_ranges(pages: list[int]) -> str:
 
 
 def llm_facts(url: str, data: dict, kept: list[dict], page_count: int, pages_sent: list[int] | None) -> list[Fact]:
+    """Turns the model's answer into facts: summary fields plus the checked key facts with their pages."""
     sent = pages_sent or list(range(1, page_count + 1))
     where = f"llm over pages {_page_ranges(sent)} of {page_count}"
     facts = [
@@ -138,6 +144,7 @@ async def run_llm(
     source: Source, store: Store, stats: RunStats, llm: OpenRouterExtractor, limit: int | None,
     concurrency: int, budget: float, dry_run: bool,
 ) -> None:
+    """Pass 2 (paid): sends new PDFs to the LLM with cache, budget cap, dry run and concurrency, then checks quotes."""
     ext_id = f"llm:{llm.cache_key_suffix}|check{VERIFY_VERSION}"  # re-checking reuses the cache, no cost
     stats.llm_model = llm.model
     todo = []
@@ -171,6 +178,7 @@ async def run_llm(
     sem = asyncio.Semaphore(concurrency)
 
     async def one(url: str, content_hash: str, pages: list[str]):
+        """One PDF: cached answer if there is one, else a paid call (unless the budget is spent)."""
         cached = store.llm_cache_get(content_hash, llm.cache_key_suffix)
         if cached:
             return url, content_hash, pages, json.loads(cached["response"]), None, None

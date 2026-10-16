@@ -1,4 +1,8 @@
-"""Overview: the whole dataset at a glance, with charts. Every chart comes from one function in queries.py."""
+"""Overview: the whole dataset at a glance, with charts. Every chart comes from one function in queries.py.
+
+Numbers on top, then: facts copied vs read by AI, entities per year, a map, the source's own label
+charts (from its config), PDF types, files per host, last run's skips, runs compared.
+"""
 
 from datetime import date
 
@@ -29,6 +33,7 @@ cols[6].metric("Ask AI cost", f"${asked['cost_usd']:.4f}",
 
 
 def bars(rows: list[dict], x: str, y: str = "n", color: str | None = None, horizontal: bool = False) -> None:
+    """A bar chart from query rows; with `color`, one stacked bar segment per value of that column."""
     if not rows:
         st.caption("No data.")
         return

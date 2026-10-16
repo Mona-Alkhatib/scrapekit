@@ -29,15 +29,18 @@ FIELD_DOCS = {
 
 @dataclass
 class PdfText:
+    """A PDF's text, one string per page, plus its metadata (title, dates ...)."""
     pages: list[str]  # index 0 is page 1
     metadata: dict
 
     @property
     def has_text_layer(self) -> bool:
+        """True if some page has real text; False means a scanned image."""
         return any(len(p.strip()) >= MIN_TEXT_CHARS_PER_PAGE for p in self.pages)
 
 
 def read_pdf(data: bytes) -> PdfText:
+    """Opens PDF bytes and returns the text of every page; raises ExtractionError for broken files."""
     try:
         with pymupdf.open(stream=data, filetype="pdf") as doc:
             # One string per page; page numbers are 1-based from here on, as a person would cite them.
@@ -57,11 +60,13 @@ def pdf_date(raw: str | None) -> str | None:
 
 
 def file_title(url: str) -> str:
+    """A readable title from the file name, e.g. 2025-annual-report.pdf becomes '2025 annual report'."""
     stem = PurePosixPath(unquote(urlparse(url).path)).stem
     return stem.replace("-", " ").replace("_", " ").strip()
 
 
 def extract(url: str, pdf: PdfText) -> list[Fact]:
+    """Facts from the PDF itself, no AI: file-name title, page count, text layer, metadata title and dates, page 1 preview."""
     facts = [
         Fact("document", url, "file_name_title", file_title(url), "file name"),
         Fact("document", url, "page_count", len(pdf.pages), "pdf structure"),

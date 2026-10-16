@@ -1,4 +1,7 @@
-"""Skip log: every link we did not fetch, or fetched and could not use, with the reason."""
+"""Skip log: every link we did not fetch, or fetched and could not use, with the reason.
+
+Opens on the latest run, because every run finds the same links again. Data: queries.skips() and skip_counts().
+"""
 
 import streamlit as st
 

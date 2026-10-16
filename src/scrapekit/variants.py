@@ -93,11 +93,13 @@ def pick_value_to_change(db: sqlite3.Connection, pages: list[str], html_of) -> t
 
 
 def change_value(html: bytes, old: str) -> tuple[bytes, str]:
+    """Edits one value inside a saved page's embedded JSON, adding ' (amended)'."""
     new = f"{old} (amended)"
     return html.replace(json.dumps(old).encode(), json.dumps(new).encode()), new
 
 
 def amend_pdf(data: bytes) -> bytes:
+    """Adds an amendment page to a PDF, so its content (and hash) changes."""
     doc = pymupdf.open(stream=data, filetype="pdf")
     page = doc.new_page()
     page.insert_text((72, 72), "AMENDMENT: this document was revised by the publisher.", fontsize=12)
@@ -108,6 +110,7 @@ def amend_pdf(data: bytes) -> bytes:
 
 
 def build_fixtures(db_path: Path, out: Path, source: Source) -> dict:
+    """Builds three fixture folders (base, changed, failed) from a real crawl and returns the plan."""
     db = sqlite3.connect(db_path)
     pages, files = pick_slice(db, source)
     if out.exists():
@@ -115,6 +118,7 @@ def build_fixtures(db_path: Path, out: Path, source: Source) -> dict:
     (out / "files").mkdir(parents=True)
 
     def put(name: str, data: bytes) -> str:
+        """Saves one fixture file and returns its path relative to a manifest."""
         (out / "files" / name).write_bytes(data)
         return f"../files/{name}"
 
@@ -158,6 +162,7 @@ def build_fixtures(db_path: Path, out: Path, source: Source) -> dict:
 
 async def run_variants(source: Source, fixtures: Path, work: Path, llm, llm_budget: float,
                        plan: dict) -> list[tuple[str, RunStats]]:
+    """Runs the four scenarios in order into a fresh database, replaying the fixtures."""
     from .cli import run_pipeline  # avoid an import cycle
 
     if work.exists():
@@ -178,6 +183,7 @@ async def run_variants(source: Source, fixtures: Path, work: Path, llm, llm_budg
 
 
 def describe_change(plan: dict) -> str:
+    """One line saying which value was edited for run 3."""
     if "changed_page" in plan:
         old, new = plan["value_change"]
         return f"- Page `{plan['changed_page']}`: field `{plan['changed_field']}` edited from `{old}` to `{new}` in the page data."
@@ -187,6 +193,7 @@ def describe_change(plan: dict) -> str:
 
 
 def report(results: list[tuple[str, RunStats]], plan: dict, db_path: Path, source: Source) -> str:
+    """Writes REPORT.md: metrics per scenario, the fact history from run 3, the skips from run 4."""
     rows = [
         ("Duration (s)", lambda s: s.duration_seconds),
         ("HTTP requests", lambda s: s.requests),

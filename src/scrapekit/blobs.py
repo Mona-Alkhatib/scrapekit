@@ -11,10 +11,12 @@ from urllib.parse import urlparse
 
 
 def sha256(data: bytes) -> str:
+    """Hex SHA-256 of the bytes: the content's id and its version number."""
     return hashlib.sha256(data).hexdigest()
 
 
 def extension_for(url: str, content_type: str | None) -> str:
+    """File extension for the saved copy: from the URL if it has one, else .html for pages, else .bin."""
     suffix = Path(urlparse(url).path).suffix.lower()
     if suffix and len(suffix) <= 6:
         return suffix
@@ -24,6 +26,7 @@ def extension_for(url: str, content_type: str | None) -> str:
 
 
 def save_blob(raw_dir: Path, data: bytes, url: str, content_type: str | None) -> tuple[str, Path]:
+    """Saves the bytes under data/raw/<xx>/<hash>.<ext> (once; identical content is not written twice). Returns (hash, path)."""
     digest = sha256(data)
     path = raw_dir / digest[:2] / f"{digest}{extension_for(url, content_type)}"
     if not path.exists():  # already saved: identical content, nothing to write

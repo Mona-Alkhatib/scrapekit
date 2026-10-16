@@ -1,4 +1,10 @@
-"""Shared pieces for every page: the database connection, the source picker, tables, provenance."""
+"""Shared pieces for every page: the database connection, the source, tables, provenance.
+
+require_data()  the read-only connection and source, or a friendly "no data" message
+table()         a clickable table; returns the selected row (cleared when the rows change)
+provenance()    where one fact came from, down to the PDF page with the quote highlighted
+raw_viewer()    the exact bytes we saved: PDF viewer or HTML source, plus download
+"""
 
 import hashlib
 import html
@@ -25,11 +31,13 @@ MAX_INLINE_PDF_BYTES = 15_000_000  # bigger PDFs are slow to embed in the browse
 
 
 def db_path() -> Path:
+    """The database this app session shows, set by `scrapekit ui --data-dir`."""
     return Path(os.environ.get(DB_ENV, "data/scrapekit.db"))
 
 
 @st.cache_resource
 def open_conn(path: str):
+    """One read-only connection per database file, shared across reruns."""
     return q.open_db(Path(path))
 
 

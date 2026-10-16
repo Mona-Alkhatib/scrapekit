@@ -1,4 +1,8 @@
-"""A Source describes one website. Adding a new site means writing one of these, not changing the crawler."""
+"""The Source: one website described as data.
+
+Every field below is read by generic code (crawler, extractors, LLM prompt, UI). A new website is a
+new Source in its own file in this folder, never a change to that code.
+"""
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -8,6 +12,7 @@ DEFAULT_FILE_EXTENSIONS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".p
 
 @dataclass(frozen=True)
 class Source:
+    """Everything that is specific to one website. The crawler, extractors and UI read it; they never name a site."""
     name: str  # short id used on the CLI and in the database, e.g. "createto"
     start_urls: tuple[str, ...]
     crawl_hosts: tuple[str, ...]  # pages are only crawled on these hosts

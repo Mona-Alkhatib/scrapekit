@@ -25,6 +25,7 @@ RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 @dataclass
 class FetchResult:
+    """The outcome of one fetch: status (0 = network error), headers, body or error text."""
     url: str
     status: int  # 0 means a network error, see `error`
     headers: dict = field(default_factory=dict)
@@ -33,10 +34,12 @@ class FetchResult:
 
     @property
     def ok(self) -> bool:
+        """True for a 200 with a body."""
         return self.status == 200 and self.body is not None
 
     @property
     def not_modified(self) -> bool:
+        """True when the server answered 304: unchanged since our saved copy."""
         return self.status == 304
 
 
@@ -49,6 +52,7 @@ class HostThrottle:
         self._last: dict[str, float] = {}
 
     async def wait(self, host: str) -> None:
+        """Waits until at least `interval` seconds have passed since the last request to this host."""
         # One lock per host: workers on the same host wait in turn, other hosts are not slowed.
         lock = self._locks.setdefault(host, asyncio.Lock())
         async with lock:
@@ -59,6 +63,8 @@ class HostThrottle:
 
 
 class Fetcher:
+    """The only code that makes HTTP requests: polite, retried, conditional, size-capped and counted."""
+
     def __init__(self, settings: Settings, stats: RunStats, transport: httpx.AsyncBaseTransport | None = None):
         self.settings = settings
         self.stats = stats
@@ -71,9 +77,11 @@ class Fetcher:
         )
 
     async def close(self) -> None:
+        """Closes the HTTP connection pool."""
         await self.client.aclose()
 
     async def fetch(self, url: str, etag: str | None = None, last_modified: str | None = None) -> FetchResult:
+        """GETs a URL politely: waits for the host, sends ETag headers, retries 429/5xx with backoff, counts it."""
         # Conditional GET headers, from the previous run's response.
         headers = {}
         if etag:

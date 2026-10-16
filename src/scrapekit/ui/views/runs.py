@@ -1,4 +1,7 @@
-"""Runs: status and metrics of every run, newest first. Select one for details."""
+"""Runs: status and metrics of every run, newest first. Select one for details.
+
+Data: queries.runs() (one row per run from the runs table), skip_counts() and run_fact_changes() for details.
+"""
 
 import streamlit as st
 
@@ -6,6 +9,7 @@ from scrapekit.ui import common, queries as q
 
 st.title("Runs")
 conn, source = common.require_data()
+# 1. One row per run, newest first. Metrics come from runs.stats_json, written at the end of each run.
 rows = q.runs(conn, source)
 st.caption("Status: ok, ok with failures (an HTTP error such as 404, or a network, parse or LLM error was logged), "
            "or incomplete (the run stopped before finishing). Select a row for details.")
@@ -15,6 +19,7 @@ picked = common.table(rows, "runs", columns=[
     column_config={"not_modified": st.column_config.NumberColumn("304s"),
                    "llm_cost_usd": st.column_config.NumberColumn("LLM $", format="$%.4f")})
 
+# 2. A run is selected: headline numbers, then its skips, the facts it changed, and every metric.
 if picked:
     st.subheader(picked["run_id"])
     cols = st.columns(4)
