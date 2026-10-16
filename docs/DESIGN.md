@@ -357,8 +357,8 @@ scrapekit run   ──writes──▶  data/scrapekit.db  +  data/raw/<hash>
 | No HTTP API yet | One local consumer does not need one. Add it when a second consumer (another service, a hosted UI) appears. |
 | Streamlit | See section 3. |
 | Click-through instead of many screens | Every table row opens its details: run → its skips and changed facts; entity → facts → provenance → history; URL → versions → raw copy → facts. |
-| One database per session | The app opens the database chosen at start (`--data-dir`) and shows its path; no database picker, so a reviewer always knows which data they are looking at. |
-| Works for any source | The sidebar lists the sources in that database; nothing in `ui/` names a website (the same guard test covers it). |
+| Shows one database | You choose the data folder when you start the app (`scrapekit ui --data-dir data/live`), and the sidebar shows its path. There is no dropdown to switch databases, so you always know which data you are looking at. |
+| Not tied to CreateTO | Everything specific to the site (field explanations, label charts, example questions) comes from its config in `sources/createto.py`. The UI code never names the site, and a test checks this, so a new source needs no UI changes. If a database holds more than one source, a source picker appears in the sidebar. |
 
 **Provenance panel.** For any fact: source URL, method (rules or LLM), locator (JSON path, PDF metadata key, or page numbers), run, valid from / to, and the content hash of the snapshot it was read from. For an LLM fact the panel shows the saved text of the cited PDF page with the quote highlighted, so the reader checks the claim in one click. If the quote is split by a page footer, the page is shown with a note instead.
 
