@@ -16,17 +16,22 @@ FAILURE_REASONS = ("network_error", "parse_error", "llm_error", "internal_error"
 
 def open_db(path: Path) -> sqlite3.Connection:
     """Opens the database read-only: any write raises an error."""
+    # "mode=ro" in a file: URI makes SQLite itself refuse writes. check_same_thread=False lets Streamlit's
+    # worker threads share the one cached connection (we only read, so that is safe).
     conn = sqlite3.connect(f"file:{Path(path).resolve()}?mode=ro", uri=True, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = sqlite3.Row  # rows behave like dicts: row["url"]
     return conn
 
 
 def _rows(conn, sql: str, params=()) -> list[dict]:
+    """Runs a query with parameters (never string-formatted user input) and returns plain dicts."""
     return [dict(r) for r in conn.execute(sql, params)]
 
 
 def _like(text: str) -> str:
     """User text as a literal LIKE pattern (used with ESCAPE '\\')."""
+    # In LIKE, % and _ are wildcards. Escape them (and the escape character) so "100%" searches for
+    # the text "100%", then wrap in % so it matches anywhere in the value.
     return "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
@@ -39,14 +44,16 @@ def sources(conn) -> list[str]:
 
 def run_status(finished_at: str | None, stats: dict) -> str:
     """ok, ok with failures (an http_* skip or a network, parse or LLM error), or incomplete (never finished)."""
-    if not finished_at:
+    if not finished_at:  # the run stopped (crash, Ctrl+C) before writing its end time
         return "incomplete"
-    skips = stats.get("skips") or {}
+    skips = stats.get("skips") or {}  # {reason: count} for this run
     failed = any(r in FAILURE_REASONS or r.startswith("http_") for r in skips) or stats.get("llm_failed")
     return "ok, with failures" if failed else "ok"
 
 
 def _run_row(r: dict) -> dict:
+    """One runs row turned into flat columns for the table. Metrics live in stats_json, written at run end;
+    a run that never finished has none, so every value falls back to 0."""
     stats = json.loads(r["stats_json"] or "{}")
     codes = stats.get("status_counts") or {}
     return {
@@ -85,10 +92,14 @@ def run_fact_changes(conn, run_id: str, limit: int = 1000) -> list[dict]:
     if not r:
         return []
     source, start, end = r[0]["source"], r[0]["started_at"], r[0]["finished_at"]
+    # 1. Rows this run inserted. A row is "updated" if an older row points to it (superseded_by), else "new".
+    #    The IN list is computed once, not per row, which keeps this fast on large tables.
     added = _rows(conn, """
         SELECT CASE WHEN f.id IN (SELECT superseded_by FROM facts WHERE superseded_by IS NOT NULL)
                     THEN 'updated' ELSE 'new' END AS change, f.*
         FROM facts f WHERE f.run_id = ? ORDER BY f.id LIMIT ?""", (run_id, limit))
+    # 2. Rows this run closed without a replacement ("removed"). They only carry a close time, so match
+    #    them to the run's time window.
     if end:
         window, params = "f.valid_to BETWEEN ? AND ?", [start, end]
     else:
@@ -105,6 +116,7 @@ def run_fact_changes(conn, run_id: str, limit: int = 1000) -> list[dict]:
 
 def skip_counts(conn, source: str, run_id: str | None = None) -> list[dict]:
     """Number of skips per reason, for a source and optionally one run."""
+    # skips has no source column, so join runs to keep only this source's skips.
     sql = "SELECT s.reason, COUNT(*) AS n FROM skips s JOIN runs r ON r.run_id = s.run_id WHERE r.source = ?"
     params: list = [source]
     if run_id:
@@ -118,6 +130,7 @@ def skips(conn, source: str, reason=None, run_id=None, search=None, limit: int =
     sql = ("SELECT s.run_id, s.reason, s.url, s.detail, s.at FROM skips s JOIN runs r ON r.run_id = s.run_id"
            " WHERE r.source = ?")
     params: list = [source]
+    # Each filter adds one "AND ... = ?" clause and one parameter, only when the user set it.
     if reason:
         sql += " AND s.reason = ?"
         params.append(reason)
@@ -143,6 +156,8 @@ def entity_types(conn, source: str) -> list[str]:
 
 def entities(conn, source: str, entity_type=None, search=None, limit: int = 500) -> list[dict]:
     """One row per entity with a display name and fact count; search matches the key or any value."""
+    # Facts are one row per field, so an entity is a GROUP BY of its rows. Its display name is the first of
+    # name, title, llm_title ... that it has; MAX(CASE ...) picks that field's value out of the group.
     name = "COALESCE(" + ", ".join(
         f"MAX(CASE WHEN field = '{f}' THEN json_extract(value, '$') END)" for f in NAME_FIELDS) + ")"
     sql = (f"SELECT entity_type, entity_key, {name} AS name, MIN(source_url) AS source_url, COUNT(*) AS facts"
@@ -153,6 +168,7 @@ def entities(conn, source: str, entity_type=None, search=None, limit: int = 500)
         params.append(entity_type)
     sql += " GROUP BY entity_type, entity_key"
     if search:
+        # HAVING filters whole entities: keep it if its key, or any of its values (except long body text), matches.
         sql += (" HAVING entity_key LIKE ? ESCAPE '\\' OR SUM(CASE WHEN field != 'body_text'"
                 " AND value LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END) > 0")
         params += [_like(search), _like(search)]
@@ -162,7 +178,7 @@ def entities(conn, source: str, entity_type=None, search=None, limit: int = 500)
 def entity_facts(conn, source: str, entity_type: str, entity_key: str, history: bool = False) -> list[dict]:
     """All facts of one entity: current only, or with history (replaced values) too."""
     sql = "SELECT * FROM facts WHERE source = ? AND entity_type = ? AND entity_key = ?"
-    if not history:
+    if not history:  # current values only; with history, closed rows (valid_to set) are included too
         sql += " AND valid_to IS NULL"
     return _rows(conn, sql + " ORDER BY field, id", (source, entity_type, entity_key))
 
@@ -177,6 +193,7 @@ def facts(conn, source: str, entity_type=None, field=None, method=None, run_id=N
     """Fact rows filtered by type, field, method, run, source URL, current-only and text search."""
     sql = "SELECT * FROM facts WHERE source = ?"
     params: list = [source]
+    # Column names come from this fixed list, never from the user; the values go in as parameters.
     for col, val in (("entity_type", entity_type), ("field", field), ("method", method), ("run_id", run_id),
                      ("source_url", source_url)):
         if val:
@@ -201,6 +218,8 @@ def fact_history(conn, fact_id: int) -> list[dict]:
     f = fact(conn, fact_id)
     if f is None:
         return []
+    # Every row ever recorded for the same field of the same entity from the same page and method.
+    # Ordered by id, each row's superseded_by points to the next one.
     return _rows(conn, """SELECT * FROM facts WHERE source = ? AND entity_type = ? AND entity_key = ?
                           AND field = ? AND source_url = ? AND method = ? ORDER BY id""",
                  (f["source"], f["entity_type"], f["entity_key"], f["field"], f["source_url"], f["method"]))
@@ -215,6 +234,8 @@ def hosts(conn, source: str) -> list[str]:
 
 def documents(conn, source: str, kind=None, host=None, saved=None, search=None, limit: int = 1000) -> list[dict]:
     """One row per URL with kind, host, status, whether a copy is saved, versions and size."""
+    # saved = we have a copy (current_hash set); versions = how many distinct contents we saved for the URL;
+    # bytes = size of the current version.
     sql = """SELECT d.url, d.kind, d.host, d.last_status, d.current_hash IS NOT NULL AS saved,
                     (SELECT COUNT(*) FROM snapshots s WHERE s.url = d.url) AS versions,
                     (SELECT bytes FROM snapshots s WHERE s.url = d.url AND s.content_hash = d.current_hash) AS bytes,
@@ -225,7 +246,7 @@ def documents(conn, source: str, kind=None, host=None, saved=None, search=None, 
         if val:
             sql += f" AND {col} = ?"
             params.append(val)
-    if saved is not None:
+    if saved is not None:  # only a fixed "NOT NULL" or "NULL" is added here, never user text
         sql += " AND d.current_hash IS " + ("NOT NULL" if saved else "NULL")
     if search:
         sql += " AND d.url LIKE ? ESCAPE '\\'"
@@ -274,6 +295,7 @@ def raw_path(conn, content_hash: str, raw_dir: Path | None = None) -> Path | Non
     if not rows:
         return None
     path = Path(rows[0]["path"])
+    # Try the stored path, then the same xx/<hash>.<ext> under this database's raw/ folder (data copied elsewhere).
     for candidate in (path, raw_dir / path.parent.name / path.name if raw_dir else None):
         if candidate is not None and candidate.exists():
             return candidate
@@ -282,6 +304,8 @@ def raw_path(conn, content_hash: str, raw_dir: Path | None = None) -> Path | Non
 
 def find_excerpt(text: str, excerpt: str) -> tuple[int, int] | None:
     """Where the quote is in the page text, ignoring case, spacing and punctuation between words."""
+    # Split the quote into words, then allow any spacing or punctuation between them: PDF text often has
+    # extra line breaks and double spaces that the model's quote does not.
     words = re.findall(r"[A-Za-z0-9$%.,]+", excerpt)
     if not words:
         return None
@@ -298,12 +322,14 @@ DATE_FIELDS = ("first_published_at", "llm_document_date", "pdf_created")
 
 def overview(conn, source: str) -> dict:
     """Headline numbers: entities, facts, saved pages and files, last run's skips, total LLM cost of runs."""
-    one = lambda sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731
+    one = lambda sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731  (runs a query that returns one number)
     # Each run logs the same skipped links again, so skips are counted for the latest finished run.
     last = one("SELECT MAX(run_id) FROM runs WHERE source = ? AND finished_at IS NOT NULL", source)
+    # The scraper's LLM cost is summed from every run's metrics. Ask AI cost is separate (ask_log.jsonl).
     cost = sum(json.loads(r["stats_json"] or "{}").get("llm_cost_usd", 0.0)
                for r in _rows(conn, "SELECT stats_json FROM runs WHERE source = ?", (source,)))
     return {
+        # An entity is a distinct (type, key) pair among current facts.
         "entities": one("SELECT COUNT(DISTINCT entity_type || ':' || entity_key) FROM facts"
                         " WHERE source = ? AND valid_to IS NULL", source),
         "facts": one("SELECT COUNT(*) FROM facts WHERE source = ? AND valid_to IS NULL", source),
@@ -324,6 +350,7 @@ def facts_by_type_method(conn, source: str) -> list[dict]:
 
 def label_counts(conn, source: str, entity_type: str, field: str) -> list[dict]:
     """How many entities have each value of a text field, e.g. projects per phase."""
+    # Values are stored as JSON; json_extract gives the plain text. Lists and objects are left out.
     return _rows(conn, """SELECT json_extract(value, '$') AS value, COUNT(*) AS n FROM facts
                           WHERE source = ? AND entity_type = ? AND field = ? AND valid_to IS NULL
                             AND json_type(value) = 'text'
@@ -339,6 +366,8 @@ def files_per_host(conn, source: str) -> list[dict]:
 
 def entities_per_year(conn, source: str) -> list[dict]:
     """Entities per year of their best date (publish date, else the date in the document, else PDF metadata)."""
+    # Inner query: one row per entity with the year (first 4 characters) of its best date field.
+    # Outer query: count entities per year and type, keeping only real years.
     best = "COALESCE(" + ", ".join(
         f"MAX(CASE WHEN field = '{f}' THEN substr(json_extract(value, '$'), 1, 4) END)" for f in DATE_FIELDS) + ")"
     return _rows(conn, f"""SELECT year, entity_type, COUNT(*) AS n FROM (
@@ -350,6 +379,8 @@ def entities_per_year(conn, source: str) -> list[dict]:
 
 def locations(conn, source: str) -> list[dict]:
     """Every entity with a location fact, with its name, for a map."""
+    # The location fact is {"lat": .., "lon": ..}; json_extract pulls each number out. The name is looked up
+    # from the same entity's name or title fact.
     name = "COALESCE(" + ", ".join(
         f"(SELECT json_extract(n.value, '$') FROM facts n WHERE n.source = f.source AND n.entity_type = f.entity_type"
         f" AND n.entity_key = f.entity_key AND n.field = '{x}' AND n.valid_to IS NULL)" for x in NAME_FIELDS[:2]) + ")"
@@ -364,6 +395,8 @@ def locations(conn, source: str) -> list[dict]:
 def field_stats(conn, source: str) -> list[dict]:
     """Every field per entity type and method: how many entities have it, share of all entities of that type,
     and one example value with its locator."""
+    # cur = current facts; agg = per field: how many entities have it, and the first row as an example;
+    # tot = how many entities of each type exist, so coverage = entities with the field / all of that type.
     rows = _rows(conn, """
         WITH cur AS (SELECT * FROM facts WHERE source = ? AND valid_to IS NULL),
              agg AS (SELECT entity_type, field, method, COUNT(DISTINCT entity_key) AS entities, MIN(id) AS first_id
@@ -373,7 +406,7 @@ def field_stats(conn, source: str) -> list[dict]:
                f.value AS example, f.locator
         FROM agg a JOIN tot t ON t.entity_type = a.entity_type JOIN facts f ON f.id = a.first_id
         ORDER BY a.entity_type, a.method DESC, a.field""", (source,))
-    for r in rows:
+    for r in rows:  # make the example readable and short
         value = json.loads(r["example"])
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
         r["example"] = text if len(text) <= 120 else text[:117] + "..."

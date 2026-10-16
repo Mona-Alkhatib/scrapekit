@@ -38,14 +38,18 @@ BLOCKED_FUNCTIONS = {"fts3_tokenizer", "load_extension", "readfile", "writefile"
 
 
 def _authorize(action, arg1, arg2, *_):
+    """SQLite asks this before every step of a query (read a table, call a function, write ...).
+    Reading is allowed; everything else, and a few dangerous functions, is denied, which fails the query."""
     if action not in ALLOWED_ACTIONS:
         return sqlite3.SQLITE_DENY
+    # For a function call, arg2 is the function's name.
     if action == sqlite3.SQLITE_FUNCTION and (arg2 or "").lower() in BLOCKED_FUNCTIONS:
         return sqlite3.SQLITE_DENY
     return sqlite3.SQLITE_OK
 
 
 def _cell(value):
+    """One result cell made safe to keep and show: binary data becomes its size, long text is trimmed."""
     if isinstance(value, (bytes, bytearray)):
         return f"<{len(value)} bytes>"
     if isinstance(value, str) and len(value) > MAX_CELL_CHARS:
@@ -56,6 +60,7 @@ def _cell(value):
 def plain_markdown(text: str) -> str:
     """Model or user text shown through Streamlit markdown, with every markdown character escaped.
     Stops links and images (a poisoned web page could ask the model for one) and $...$ math."""
+    # Put a backslash before every character that means something in Markdown, so it shows as itself.
     return re.sub(r"([\\`*_{}\[\]()#+\-.!<>|$~])", r"\\\1", text)
 
 
@@ -70,7 +75,7 @@ CURRENT_FACTS_VIEW = """CREATE TEMP VIEW IF NOT EXISTS current_facts AS
 def reader(db_path: Path) -> sqlite3.Connection:
     """A read-only connection with the current_facts view, for the model's queries and for describing the schema."""
     conn = q.open_db(db_path)
-    conn.execute(CURRENT_FACTS_VIEW)
+    conn.execute(CURRENT_FACTS_VIEW)  # allowed on a read-only file: TEMP objects live in this connection's memory
     return conn
 
 
@@ -80,26 +85,28 @@ class UnsafeSql(ValueError):
 
 def check_sql(sql: str) -> str:
     """Accepts one SELECT (or WITH ... SELECT) statement; raises UnsafeSql for anything else."""
-    text = sql.strip().rstrip(";").strip()
-    if ";" in text:
+    text = sql.strip().rstrip(";").strip()  # a single trailing ; is fine
+    if ";" in text:  # any other ; could start a second statement
         raise UnsafeSql("Only one statement is allowed.")
-    if not re.match(r"(?is)^(select|with)\b", text):
+    if not re.match(r"(?is)^(select|with)\b", text):  # must start with SELECT or WITH (any case)
         raise UnsafeSql("Only SELECT queries are allowed.")
     return text
 
 
 def run_sql(db_path: Path, sql: str, max_rows: int = MAX_ROWS, timeout_s: float = TIMEOUT_S):
     """Returns (columns, rows, truncated). Raises UnsafeSql or sqlite3.Error."""
-    text = check_sql(sql)
+    text = check_sql(sql)  # layer 1: the text must be one SELECT
     conn = reader(db_path)  # a separate connection: the authorizer must not affect the UI's own queries
     try:
-        conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
+        # Layer 2: the file is opened read-only (reader -> open_db). Layer 3: the authorizer allows only reading.
+        conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)  # no value over 1 MB (memory guard)
         conn.set_authorizer(_authorize)
+        # Time limit: SQLite calls the handler every 10,000 steps; returning 1 stops the query.
         deadline = time.monotonic() + timeout_s
         conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10_000)
         try:
             cur = conn.execute(text)
-            rows = cur.fetchmany(max_rows + 1)
+            rows = cur.fetchmany(max_rows + 1)  # one extra row tells us whether there were more than the cap
         except sqlite3.OperationalError as exc:
             if "interrupted" in str(exc):
                 raise sqlite3.OperationalError(f"the query took longer than {timeout_s:g} s and was stopped") from exc
@@ -115,6 +122,7 @@ def schema_prompt(db_path: Path, docs: dict[str, str], source: str) -> str:
     conn = reader(db_path)
     try:
         about = {name: (what, cols) for name, what, cols in TABLES}
+        # 1. The easy view first, then every real table with its columns and a one-line description.
         columns = ", ".join(r[1] for r in conn.execute("PRAGMA temp.table_info(current_facts)"))
         lines = ["Main view (use this first):",
                  f"- current_facts({columns}): every current fact, value as plain text (lists and objects as JSON).",
@@ -122,8 +130,11 @@ def schema_prompt(db_path: Path, docs: dict[str, str], source: str) -> str:
         for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"):
             columns = ", ".join(r[1] for r in conn.execute(f"PRAGMA table_info({name})"))
             lines.append(f"- {name}({columns})" + (f": {about[name][0]}" if name in about else ""))
+        # 2. Query tips (same as the Data dictionary page).
         lines += ["", "Rules:", *[f"- {t.replace('`', '')}" for t in TIPS]]
         lines.append("- facts.value is JSON text; facts of other entity types can be joined on entity_type and entity_key.")
+        # 3. Every field that exists in the data, with its meaning and a real example value, so the model
+        #    uses exact field names and value formats.
         lines += ["", f"Fields in facts for source '{source}' (entity_type: field = meaning; example):"]
         for s in q.field_stats(conn, source):
             meaning = docs.get(f"{s['entity_type']}.{s['field']}") or docs.get(s["field"]) or ""
@@ -182,13 +193,17 @@ class Asker:
     """The Ask AI agent for one database and source: question to SQL to rows to answer."""
 
     def __init__(self, llm, db_path: Path, docs: dict[str, str], source: str, max_attempts: int = MAX_ATTEMPTS):
+        """llm is anything with complete(messages, schema) -> (dict, cost): OpenRouterChat, or a fake in tests."""
         self.llm = llm
         self.db_path = Path(db_path)
         self.source = source
         self.max_attempts = max_attempts
+        # The system prompt is built once per question asker: instructions + two examples + the schema.
         self.system = SQL_PROMPT.format(source=source, schema=schema_prompt(self.db_path, docs, source))
 
     def _call(self, result: AskResult, budget_left: float, messages, schema) -> dict | None:
+        """One model call, guarded: stops if the budget is spent, records the cost, and turns any failure into
+        result.error (returning None) instead of raising, so the money already spent is never lost."""
         if result.cost_usd >= budget_left:
             result.error = "Session budget reached: no more paid calls in this session."
             return None
@@ -204,6 +219,8 @@ class Asker:
         """Answers one question within the remaining budget; never raises, problems go into result.error."""
         result = AskResult(question)
         messages = [{"role": "system", "content": self.system}, {"role": "user", "content": question}]
+        # Step 1: the model writes SQL; we run it. If SQLite rejects it, the error goes back to the model
+        # as the next message and it gets one more try.
         for attempt in range(1, self.max_attempts + 1):
             data = self._call(result, budget_left, messages, SQL_SCHEMA)
             if data is None:
@@ -218,9 +235,10 @@ class Asker:
                 result.error = f"{type(exc).__name__}: {exc}"
                 messages += [{"role": "assistant", "content": json.dumps(data)},
                              {"role": "user", "content": f"That query failed: {result.error}. Write a corrected query."}]
-        if result.error:
+        if result.error:  # both attempts failed, or the budget ran out: return the error with the last SQL
             return result
 
+        # Step 2: the model writes a short answer from the rows (at most 50 rows and 20,000 characters sent).
         shown = [dict(zip(result.columns, r)) for r in result.rows[:ROWS_FOR_ANSWER]]
         note = f"{len(result.rows)} rows" + (" (more exist, capped)" if result.truncated else "")
         content = (f"Question: {question}\nSQL: {result.sql}\nResult: {note}, first {len(shown)} shown:\n"
@@ -229,7 +247,7 @@ class Asker:
                                                 {"role": "user", "content": content}], ANSWER_SCHEMA)
         if data is not None:
             result.answer = data.get("answer", "")
-        else:
+        else:  # the summary failed, but the query worked: keep the rows, explain in the answer line
             result.answer = f"(No summary: {result.error}) The rows below are the answer."
         result.error = None
         return result
@@ -251,7 +269,7 @@ def append_log(path: Path, result: AskResult, source: str) -> None:
     entry = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": source,
              "question": result.question, "sql": result.sql, "rows": len(result.rows), "attempts": result.attempts,
              "cost_usd": round(result.cost_usd, 6), "error": result.error}
-    with Path(path).open("a", encoding="utf-8") as f:
+    with Path(path).open("a", encoding="utf-8") as f:  # "a" = append: earlier questions are never rewritten
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
@@ -270,6 +288,7 @@ def read_log(path: Path) -> list[dict]:
 
 def log_totals(path: Path, source: str | None = None) -> dict:
     """How many questions were asked and what they cost, optionally for one source."""
+    # Entries without a source (none exist today) count for every source.
     entries = [e for e in read_log(path) if source is None or e.get("source") in (None, source)]
     return {"questions": len(entries), "cost_usd": round(sum(float(e.get("cost_usd") or 0) for e in entries), 6)}
 
@@ -278,21 +297,24 @@ class OpenRouterChat:
     """The real model, through OpenRouter. Same `complete` method as the test fake."""
 
     def __init__(self, model: str | None = None, api_key: str | None = None):
+        """Uses the OpenAI SDK pointed at OpenRouter; the key comes from .env (OPENROUTER_API_KEY)."""
         from openai import OpenAI
 
         key = api_key or os.environ.get("OPENROUTER_API_KEY")
         if not key:
             raise RuntimeError("OPENROUTER_API_KEY is not set")
         self.model = model or os.environ.get("SCRAPEKIT_LLM_MODEL") or DEFAULT_MODEL
+        # One retry on network errors (each retry can be billed), 60 seconds per call.
         self.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key, max_retries=1, timeout=60)
 
     def complete(self, messages: list[dict], schema: dict) -> tuple[dict, float]:
         """One chat call with a strict JSON schema; returns (answer dict, real cost in USD)."""
         resp = self.client.chat.completions.create(
-            model=self.model, temperature=0, messages=messages,
+            model=self.model, temperature=0, messages=messages,  # temperature 0: same question, same SQL
             response_format={"type": "json_schema", "json_schema": schema},
             extra_body={"usage": {"include": True}},  # OpenRouter then returns the real cost
         )
         usage = resp.usage
+        # OpenRouter adds the real cost to the usage block; if it is missing, count a safe fixed amount.
         cost = float((usage.model_extra or {}).get("cost") or 0.0) if usage else 0.0
         return json.loads(resp.choices[0].message.content or "{}"), cost or FALLBACK_CALL_COST_USD

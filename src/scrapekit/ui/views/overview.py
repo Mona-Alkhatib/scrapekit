@@ -14,6 +14,7 @@ from scrapekit.ui import ask, common, queries as q
 
 st.title("Overview")
 conn, source = common.require_data()
+# 1. Headline numbers: one query for the data, one read of the Ask AI log for its cost.
 o = q.overview(conn, source)
 
 asked = ask.log_totals(ask.log_path(common.db_path()), source)
@@ -38,13 +39,14 @@ def bars(rows: list[dict], x: str, y: str = "n", color: str | None = None, horiz
         st.caption("No data.")
         return
     frame = pd.DataFrame(rows)
-    if color:
+    if color:  # long rows (x, color, n) -> one column per color value, which Streamlit stacks
         frame = frame.pivot_table(index=x, columns=color, values=y, fill_value=0)
         st.bar_chart(frame, horizontal=horizontal)
     else:
         st.bar_chart(frame.set_index(x)[y], horizontal=horizontal)
 
 
+# 2. Charts, two per row. Each one is a single query function.
 left, right = st.columns(2)
 with left:
     st.subheader("Facts: copied or read by AI")
@@ -57,6 +59,7 @@ with right:
                f"The last 5 years start in {date.today().year - 5}.")
     bars(q.entities_per_year(conn, source), "year", color="entity_type")
 
+# 3. Map of every entity that has a location fact (any source that extracts locations gets one).
 places = q.locations(conn, source)
 if places:
     st.subheader(f"Map ({len(places)} entities with a location)")
@@ -78,6 +81,7 @@ with right:
     st.caption("off_domain = a link to another website (we only crawl this site's pages, but download files from anywhere).")
     bars(q.skip_counts(conn, source, o["last_run"]) if o["last_run"] else [], "reason", horizontal=True)
 
+# 4. Runs side by side, oldest first: requests (304 vs other), minutes and LLM cost.
 runs = q.runs(conn, source)
 if runs:
     st.subheader("Runs compared")

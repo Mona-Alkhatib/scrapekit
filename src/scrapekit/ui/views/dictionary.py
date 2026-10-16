@@ -18,6 +18,7 @@ st.caption("Each fact is one field of one thing (a project, news item, document 
            "Coverage = share of things of that type that have the field.")
 st.caption(common.METHOD_EXPLAINED)
 
+# 1. One table per entity type: field, meaning (from the code and the Source config), how found, coverage, example.
 stats = q.field_stats(conn, source)
 for kind in sorted({s["entity_type"] for s in stats}):
     rows = [s for s in stats if s["entity_type"] == kind]
@@ -32,6 +33,7 @@ for kind in sorted({s["entity_type"] for s in stats}):
         "coverage": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
     })
 
+# 2. The database tables and query tips, for engineers who query SQLite directly.
 st.header("Tables")
 st.caption("For querying the SQLite file directly (or through Ask AI). Path: the Database chosen in the sidebar.")
 st.dataframe(pd.DataFrame(tables_doc.TABLES, columns=["table", "what it holds", "main columns"]), hide_index=True,

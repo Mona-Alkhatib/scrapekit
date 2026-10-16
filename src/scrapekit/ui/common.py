@@ -32,10 +32,11 @@ MAX_INLINE_PDF_BYTES = 15_000_000  # bigger PDFs are slow to embed in the browse
 
 def db_path() -> Path:
     """The database this app session shows, set by `scrapekit ui --data-dir`."""
+    # `scrapekit ui` puts the path in this environment variable before starting Streamlit.
     return Path(os.environ.get(DB_ENV, "data/scrapekit.db"))
 
 
-@st.cache_resource
+@st.cache_resource  # Streamlit keeps the returned connection between reruns instead of reopening it each click
 def open_conn(path: str):
     """One read-only connection per database file, shared across reruns."""
     return q.open_db(Path(path))
@@ -52,12 +53,13 @@ def require_data():
     if not names:
         st.info("No runs in this database yet. Run `scrapekit run <source>` first.")
         st.stop()
-    current = st.session_state.get("source")
+    current = st.session_state.get("source")  # set by the sidebar in app.py
     return conn, current if current in names else names[0]
 
 
 def _readable(row: dict) -> dict:
     """Fact values are stored as JSON; show text as plain text and lists or objects as compact JSON."""
+    # Display copies only: the original row (with parse / llm and JSON) is what callers get back.
     if row.get("method") in METHOD_LABELS:
         row = {**row, "method": METHOD_LABELS[row["method"]]}
     if "value" not in row or not isinstance(row["value"], str):
@@ -77,21 +79,24 @@ def table(rows: list[dict], key: str, columns: list[str] | None = None, column_c
         return None
     # Streamlit remembers a selection as a row number. When the rows change (a filter, another parent row),
     # that number would point at a different row, so drop the old selection instead.
+    # The fingerprint is a hash of the first 3 columns of every row: same rows, same fingerprint.
     fingerprint = hashlib.md5(repr([tuple(r.values())[:3] for r in rows]).encode()).hexdigest()
     previous = st.session_state.get(f"_rows_{key}")
     if previous is not None and previous != fingerprint and key in st.session_state:
         del st.session_state[key]
     st.session_state[f"_rows_{key}"] = fingerprint
     frame = pd.DataFrame([_readable(r) for r in rows]).convert_dtypes()  # keeps ids as integers next to blanks
+    # on_select="rerun": clicking a row re-runs the page, and the selection is read back below.
     event = st.dataframe(frame, key=key, hide_index=True, on_select="rerun", selection_mode="single-row",
                          column_order=columns, column_config=column_config)
-    picked = event.selection.rows
+    picked = event.selection.rows  # list of selected row numbers (0 or 1 of them)
     return rows[picked[0]] if picked and picked[0] < len(rows) else None
 
 
 def provenance(conn, fact: dict) -> None:
     """Where one fact came from: source, method, locator, run, validity, and for PDF quotes the page itself."""
     value = json.loads(fact["value"])
+    # 1. The source details every fact has.
     st.markdown(f"**{fact['field']}** of `{fact['entity_key']}`")
     meta = {
         "source_url": fact["source_url"], "method": METHOD_LABELS.get(fact["method"], fact["method"]), "locator": fact["locator"],
@@ -99,6 +104,8 @@ def provenance(conn, fact: dict) -> None:
         "content_hash": fact["content_hash"],
     }
     st.table(meta)
+    # 2. Quotes to show on their page: each AI key fact has {value, page, excerpt}; a rule fact with an
+    #    excerpt (the first-page preview) is shown on page 1.
     quotes = value if fact["field"] == "llm_key_facts" and isinstance(value, list) else []
     if fact["excerpt"] and not quotes:
         quotes = [{"value": value, "page": 1, "excerpt": fact["excerpt"]}]
@@ -108,6 +115,8 @@ def provenance(conn, fact: dict) -> None:
             if text is None:
                 st.caption("Page text not saved.")
                 continue
+            # 3. Find the quote in the saved page text and wrap it in <mark>. Everything is HTML-escaped first,
+            #    so page text can never inject HTML into the app.
             span = q.find_excerpt(text, item.get("excerpt", ""))
             if span:
                 a, b = span
@@ -117,12 +126,14 @@ def provenance(conn, fact: dict) -> None:
                 st.caption("Quote not found verbatim in this page's text (spacing differs); showing the page.")
             # st.html shows the escaped text as-is: no Markdown or math parsing of PDF text.
             st.html(f"<div style='white-space:pre-wrap;font-size:0.85em'>{body}</div>")
+    # 4. A copied fact has no quote: its locator (a JSON path or PDF property) says exactly where it came from.
     if not quotes and fact["method"] == "parse":
         st.caption(f"Read exactly from the saved copy at `{fact['locator']}`.")
 
 
 def raw_viewer(conn, content_hash: str, content_type: str | None) -> None:
     """Shows the exact bytes we saved: PDFs in a viewer, HTML as source. Always offers a download."""
+    # The snapshot's stored path, or the same file in this database's raw/ folder.
     path = q.raw_path(conn, content_hash, raw_dir=db_path().parent / "raw")
     if path is None:
         st.caption("Raw copy is not on this machine (only the database was copied).")
@@ -135,4 +146,4 @@ def raw_viewer(conn, content_hash: str, content_type: str | None) -> None:
         else:
             st.pdf(data, height=600)
     else:
-        st.code(data[:200_000].decode("utf-8", "replace"), language="html")
+        st.code(data[:200_000].decode("utf-8", "replace"), language="html")  # pages: the HTML source, first 200 KB
