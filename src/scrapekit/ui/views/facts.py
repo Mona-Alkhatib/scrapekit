@@ -19,7 +19,7 @@ c5, c6 = st.columns([3, 1])
 search = c5.text_input("Value or entity contains")
 current_only = c6.toggle("Current values only", value=True)
 rows = q.facts(conn, source, entity_type=kind or None, field=field or None, method=method or None,
-               run_id=run_id or None, current_only=current_only, search=search or None)
+               run_id=run_id or None, current_only=current_only, search=search or None, as_of=common.as_of())
 st.caption(f"{len(rows)} facts (max 1,000). Select one for its source and history.")
 picked = common.table(rows, "facts", columns=["id", "entity_type", "entity_key", "field", "value", "method", "locator", "valid_from", "valid_to"])
 # 2. A fact is selected: where it came from, and its earlier values if it changed.

@@ -15,7 +15,7 @@ conn, source = common.require_data()
 c1, c2 = st.columns([1, 3])
 kind = c1.selectbox("Type", [""] + q.entity_types(conn, source), format_func=lambda t: t or "all")
 search = c2.text_input("Search", placeholder="name, address, phase, ward ...")
-rows = q.entities(conn, source, entity_type=kind or None, search=search or None)
+rows = q.entities(conn, source, entity_type=kind or None, search=search or None, as_of=common.as_of())
 st.caption(f"{len(rows)} entities (max 500). Select one to see its facts.")
 picked = common.table(rows, "entities", columns=["entity_type", "entity_key", "name", "facts", "source_url"],
                       column_config={"source_url": st.column_config.LinkColumn("source_url")})
@@ -23,7 +23,7 @@ picked = common.table(rows, "entities", columns=["entity_type", "entity_key", "n
 if picked:
     st.subheader(picked["name"] or picked["entity_key"])
     history = st.toggle("Show history (replaced values too)")
-    facts = q.entity_facts(conn, source, picked["entity_type"], picked["entity_key"], history=history)
+    facts = q.entity_facts(conn, source, picked["entity_type"], picked["entity_key"], history=history, as_of=common.as_of())
     for f in facts:
         f["status"] = "current" if f["valid_to"] is None else f"replaced {f['valid_to'][:10]}"
     chosen = common.table(facts, "entity_facts", columns=["field", "value", "method", "locator", "status", "valid_from"])

@@ -17,7 +17,7 @@ host = c2.selectbox("Host", [""] + q.hosts(conn, source), format_func=lambda h: 
 saved = c3.selectbox("Saved copy", ["all", "saved", "not saved"])
 search = c4.text_input("URL contains")
 rows = q.documents(conn, source, kind=kind or None, host=host or None,
-                   saved={"all": None, "saved": True, "not saved": False}[saved], search=search or None)
+                   saved={"all": None, "saved": True, "not saved": False}[saved], search=search or None, as_of=common.as_of())
 st.caption(f"{len(rows)} URLs (max 1,000). last_status 304 = checked and unchanged; blank = never saved (see skips).")
 picked = common.table(rows, "documents", columns=["kind", "url", "host", "last_status", "saved", "versions", "bytes", "last_seen_run"],
                       column_config={"url": st.column_config.LinkColumn("url")})
@@ -35,7 +35,7 @@ if picked:
         else:
             st.caption("Never saved.")
     with tabs[2]:  # what did we extract from it?
-        rows_f = q.facts(conn, source, source_url=picked["url"])
+        rows_f = q.facts(conn, source, source_url=picked["url"], as_of=common.as_of())
         chosen = common.table(rows_f, "doc_facts", columns=["entity_type", "entity_key", "field", "value", "method", "locator"])
         if chosen:
             common.provenance(conn, chosen)

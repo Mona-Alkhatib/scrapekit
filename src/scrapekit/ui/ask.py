@@ -66,16 +66,25 @@ def plain_markdown(text: str) -> str:
 
 # A temporary view on the AI's own connection (temp objects live in memory, the database file is untouched).
 # Fact values are stored as JSON (a text value keeps its quotes); here they are plain text, which models get right far more often.
+# With "Data as of" set in the sidebar, the view holds the values at that time instead of the latest ones.
 CURRENT_FACTS_VIEW = """CREATE TEMP VIEW IF NOT EXISTS current_facts AS
     SELECT id, source, entity_type, entity_key, field, json_extract(value, '$') AS value, source_url, locator,
            excerpt, method, run_id, valid_from
-    FROM facts WHERE valid_to IS NULL"""
+    FROM facts WHERE {window}"""
+TIMESTAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?([+-]\d\d:\d\d|Z)?")
 
 
-def reader(db_path: Path) -> sqlite3.Connection:
-    """A read-only connection with the current_facts view, for the model's queries and for describing the schema."""
+def reader(db_path: Path, as_of: str | None = None) -> sqlite3.Connection:
+    """A read-only connection with the current_facts view, for the model's queries and for describing the schema.
+    as_of: a run's finished_at, to show the data as that run left it (None = latest)."""
+    if as_of is None:
+        window = "valid_to IS NULL"
+    elif TIMESTAMP.fullmatch(as_of):  # a view cannot take parameters, so the time is checked, then written in
+        window = f"valid_from <= '{as_of}' AND (valid_to IS NULL OR valid_to > '{as_of}')"
+    else:
+        raise ValueError(f"not a timestamp: {as_of!r}")
     conn = q.open_db(db_path)
-    conn.execute(CURRENT_FACTS_VIEW)  # allowed on a read-only file: TEMP objects live in this connection's memory
+    conn.execute(CURRENT_FACTS_VIEW.format(window=window))  # allowed read-only: TEMP objects live in memory
     return conn
 
 
@@ -93,10 +102,10 @@ def check_sql(sql: str) -> str:
     return text
 
 
-def run_sql(db_path: Path, sql: str, max_rows: int = MAX_ROWS, timeout_s: float = TIMEOUT_S):
+def run_sql(db_path: Path, sql: str, max_rows: int = MAX_ROWS, timeout_s: float = TIMEOUT_S, as_of=None):
     """Returns (columns, rows, truncated). Raises UnsafeSql or sqlite3.Error."""
     text = check_sql(sql)  # layer 1: the text must be one SELECT
-    conn = reader(db_path)  # a separate connection: the authorizer must not affect the UI's own queries
+    conn = reader(db_path, as_of)  # a separate connection: the authorizer must not affect the UI's own queries
     try:
         # Layer 2: the file is opened read-only (reader -> open_db). Layer 3: the authorizer allows only reading.
         conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)  # no value over 1 MB (memory guard)
@@ -117,9 +126,9 @@ def run_sql(db_path: Path, sql: str, max_rows: int = MAX_ROWS, timeout_s: float 
         conn.close()
 
 
-def schema_prompt(db_path: Path, docs: dict[str, str], source: str) -> str:
+def schema_prompt(db_path: Path, docs: dict[str, str], source: str, as_of: str | None = None) -> str:
     """What the model needs to write correct SQL: tables, columns, their meaning, fields and example values."""
-    conn = reader(db_path)
+    conn = reader(db_path, as_of)
     try:
         about = {name: (what, cols) for name, what, cols in TABLES}
         # 1. The easy view first, then every real table with its columns and a one-line description.
@@ -135,6 +144,9 @@ def schema_prompt(db_path: Path, docs: dict[str, str], source: str) -> str:
         lines.append("- facts.value is JSON text; facts of other entity types can be joined on entity_type and entity_key.")
         lines.append("- facts.method: 'parse' = copied from the page by rules, 'llm' = read from a PDF by the AI model. "
                      "Count current facts in current_facts, not in facts (facts also holds old versions).")
+        if as_of:  # the user picked an older run in the sidebar
+            lines.append(f"- The user is viewing the data as of {as_of}: current_facts already holds the values at "
+                         f"that time. For runs and skips, use only runs with started_at <= '{as_of}'.")
         lines.append("- In current_facts, JSON true/false become the numbers 1/0: compare with = 0, not = '0'.")
         # 3. Run stats and skip reasons, read from the data, so the model uses real JSON keys and reason names.
         last = conn.execute("SELECT stats_json FROM runs WHERE source = ? AND stats_json IS NOT NULL "
@@ -151,7 +163,7 @@ def schema_prompt(db_path: Path, docs: dict[str, str], source: str) -> str:
         # 4. Every field that exists in the data, with its meaning and a real example value, so the model
         #    uses exact field names and value formats.
         lines += ["", f"Fields in facts for source '{source}' (entity_type: field = meaning; example):"]
-        for s in q.field_stats(conn, source):
+        for s in q.field_stats(conn, source, as_of=as_of):
             meaning = docs.get(f"{s['entity_type']}.{s['field']}") or docs.get(s["field"]) or ""
             example = {"true": 1, "false": 0}.get(s["example"], s["example"][:60])  # booleans as current_facts returns them
             lines.append(f"- {s['entity_type']}: {s['field']} = {meaning[:140]}; e.g. {example!r}")
@@ -209,14 +221,17 @@ class AskResult:
 class Asker:
     """The Ask AI agent for one database and source: question to SQL to rows to answer."""
 
-    def __init__(self, llm, db_path: Path, docs: dict[str, str], source: str, max_attempts: int = MAX_ATTEMPTS):
-        """llm is anything with complete(messages, schema) -> (dict, cost): OpenRouterChat, or a fake in tests."""
+    def __init__(self, llm, db_path: Path, docs: dict[str, str], source: str, max_attempts: int = MAX_ATTEMPTS,
+                 as_of: str | None = None):
+        """llm is anything with complete(messages, schema) -> (dict, cost): OpenRouterChat, or a fake in tests.
+        as_of: answer about the data as a run left it (the sidebar's "Data as of"); None = latest."""
         self.llm = llm
         self.db_path = Path(db_path)
         self.source = source
         self.max_attempts = max_attempts
+        self.as_of = as_of
         # The system prompt is built once per question asker: instructions + two examples + the schema.
-        self.system = SQL_PROMPT.format(source=source, schema=schema_prompt(self.db_path, docs, source))
+        self.system = SQL_PROMPT.format(source=source, schema=schema_prompt(self.db_path, docs, source, as_of))
 
     def _call(self, result: AskResult, budget_left: float, messages, schema) -> dict | None:
         """One model call, guarded: stops if the budget is spent, records the cost, and turns any failure into
@@ -245,7 +260,7 @@ class Asker:
             result.attempts = attempt
             result.sql, result.explanation = data.get("sql", ""), data.get("explanation", "")
             try:
-                result.columns, result.rows, result.truncated = run_sql(self.db_path, result.sql)
+                result.columns, result.rows, result.truncated = run_sql(self.db_path, result.sql, as_of=self.as_of)
                 result.error = None
                 break
             except (UnsafeSql, sqlite3.Error) as exc:

@@ -152,6 +152,8 @@ uv run scrapekit ui --data-dir <folder>           # or any other data folder
 | Data dictionary | Every field per entity type: what it means, how it was extracted (rules or LLM), coverage, an example value and locator. Plus a guide to the database tables and query tips. |
 | Ask AI | Ask a question in plain English. The model writes one SQL query, it runs on a connection that can only read, and you get the answer plus the SQL and the rows to check it. About $0.001 per question, capped at $0.25 per session. Every question is saved to `ask_log.jsonl` (question, SQL, cost) and its total shows on the Overview as "Ask AI cost", separate from the scraper's LLM cost. Needs `OPENROUTER_API_KEY`; every other page works without it. |
 
+**Data as of a run:** the sidebar's "Data as of" shows the data exactly as a finished run left it (default: latest). If the newest run looks wrong, pick the one before it: every page, chart and Ask AI answer then uses that moment, and a banner says so. Runs only store what changed, so this rebuilds the older state from each fact's `valid_from` / `valid_to`, not by hiding a run.
+
 **Provenance panel:** for any fact, its source URL, method, locator, run, when it was valid and the content hash of the snapshot it came from. For an LLM fact from a PDF, the saved text of the cited page with the quote highlighted.
 
 ![Overview](docs/img/ui-overview.png)

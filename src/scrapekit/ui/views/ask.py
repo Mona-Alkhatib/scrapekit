@@ -59,7 +59,8 @@ question = st.text_input("Your question", value=picked or "", placeholder="Ask a
 if st.button("Ask", type="primary", disabled=not question or budget_left <= 0):
     with st.spinner("Writing and running the query ..."):
         try:
-            asker = ask.Asker(ask.OpenRouterChat(), common.db_path(), field_docs(SOURCES.get(source)), source)
+            asker = ask.Asker(ask.OpenRouterChat(), common.db_path(), field_docs(SOURCES.get(source)), source,
+                               as_of=common.as_of())
             result = asker.ask(question, budget_left=budget_left)
         except Exception as exc:  # network or API errors: show them, never crash the page
             result = ask.AskResult(question, error=f"{type(exc).__name__}: {exc}")

@@ -16,7 +16,10 @@ PDF = "https://files.example.net/report.pdf"
 
 
 @pytest.fixture
-def db(tmp_path) -> Path:
+def db(tmp_path, monkeypatch) -> Path:
+    # The store stamps times to the second; a ticking clock keeps every write in order, as in a real crawl.
+    clock = iter(f"2026-01-01T00:{i // 60:02d}:{i % 60:02d}+00:00" for i in range(3600))
+    monkeypatch.setattr("scrapekit.db.utcnow", lambda: next(clock))
     path = tmp_path / "data" / "scrapekit.db"
     raw = tmp_path / "data" / "raw"
     raw.mkdir(parents=True)
@@ -357,3 +360,55 @@ def test_method_shown_in_plain_words():
     assert _readable({"method": "parse"})["method"] == "Copied"
     assert _readable({"method": "llm"})["method"] == "Read by AI"
 
+
+
+# ---------- data as of a run ----------
+
+def test_as_of_runs_lists_finished_runs_newest_first(conn):
+    runs = q.as_of_runs(conn, "demo")
+    assert [r["run_id"] for r in runs] == ["20260102T000000Z-bbbb", "20260101T000000Z-aaaa"]  # crashed run left out
+    assert all(r["finished_at"] for r in runs)
+
+
+def test_as_of_an_older_run_shows_the_values_of_that_time(conn):
+    first = q.as_of_runs(conn, "demo")[-1]["finished_at"]
+    phase = lambda **kw: [f["value"] for f in q.facts(conn, "demo", field="phase", **kw)]  # noqa: E731
+    assert phase() == ['"Construction"']  # latest
+    assert phase(as_of=first) == ['"Planning"']  # what run 1 left behind
+    assert {f["value"] for f in q.entity_facts(conn, "demo", "project", "alpha", as_of=first)
+            if f["field"] == "phase"} == {'"Planning"'}
+    assert q.label_counts(conn, "demo", "project", "phase", as_of=first) == [{"value": "Planning", "n": 1}]
+    assert q.overview(conn, "demo", as_of=first)["facts"] == q.overview(conn, "demo")["facts"]  # same count, older values
+    assert q.overview(conn, "demo", as_of=first)["last_run"] == "20260101T000000Z-aaaa"
+
+
+def test_as_of_hides_what_did_not_exist_yet(conn):
+    before = "2025-01-01T00:00:00+00:00"  # earlier than every run
+    assert q.entities(conn, "demo", as_of=before) == []
+    assert q.field_stats(conn, "demo", as_of=before) == []
+    assert q.documents(conn, "demo", as_of=before) == []
+    assert q.overview(conn, "demo", as_of=before)["entities"] == 0
+
+
+def test_run_chosen_in_the_sidebar_reaches_the_pages(db):
+    first = q.as_of_runs(q.open_db(db), "demo")[-1]["finished_at"]
+    for as_of, phase in ((None, "Construction"), (first, "Planning")):
+        os.environ["SCRAPEKIT_UI_DB"] = str(db)
+        at = AppTest.from_file(str(UI / "views" / "facts.py"), default_timeout=30)
+        if as_of:
+            at.session_state["as_of"] = as_of  # what the sidebar sets
+        at.run()
+        assert not at.exception
+        assert phase in set(at.dataframe[0].value["value"])
+
+
+def test_sidebar_offers_finished_runs_and_shows_a_banner(db):
+    os.environ["SCRAPEKIT_UI_DB"] = str(db)
+    at = AppTest.from_file(str(UI / "app.py"), default_timeout=30).run()
+    pick = at.sidebar.selectbox[0]
+    assert pick.label == "Data as of" and pick.options == ["latest", "20260102T000000Z-bbbb", "20260101T000000Z-aaaa"]
+    assert not any("Showing the data as it was" in i.value for i in at.info)
+    pick.select("20260101T000000Z-aaaa").run()
+    assert not at.exception
+    assert at.session_state["as_of"] == q.as_of_runs(q.open_db(db), "demo")[-1]["finished_at"]
+    assert any("after run 20260101T000000Z-aaaa" in i.value for i in at.info)

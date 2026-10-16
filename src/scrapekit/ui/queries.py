@@ -35,6 +35,24 @@ def _like(text: str) -> str:
     return "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
+def _current(as_of: str | None, alias: str = "") -> tuple[str, tuple]:
+    """The SQL condition for "the value at that time", with its parameters.
+
+    as_of=None: the latest values (valid_to IS NULL). as_of=a run's finished_at: facts that existed by then
+    and had not yet been replaced or removed, i.e. the data exactly as that run left it. Runs only write
+    what changed, so this time window, not run_id, is what rebuilds an older state."""
+    c = f"{alias}." if alias else ""
+    if as_of is None:
+        return f"{c}valid_to IS NULL", ()
+    return f"{c}valid_from <= ? AND ({c}valid_to IS NULL OR {c}valid_to > ?)", (as_of, as_of)
+
+
+def as_of_runs(conn, source: str) -> list[dict]:
+    """Finished runs, newest first: the points in time the data can be viewed at (a crashed run has no end)."""
+    return _rows(conn, """SELECT run_id, finished_at FROM runs WHERE source = ? AND finished_at IS NOT NULL
+                          ORDER BY started_at DESC""", (source,))
+
+
 def sources(conn) -> list[str]:
     """Source names that have runs in this database."""
     return [r["source"] for r in _rows(conn, "SELECT DISTINCT source FROM runs ORDER BY source")]
@@ -154,15 +172,15 @@ def entity_types(conn, source: str) -> list[str]:
         conn, "SELECT DISTINCT entity_type FROM facts WHERE source = ? ORDER BY 1", (source,))]
 
 
-def entities(conn, source: str, entity_type=None, search=None, limit: int = 500) -> list[dict]:
+def entities(conn, source: str, entity_type=None, search=None, limit: int = 500, as_of=None) -> list[dict]:
     """One row per entity with a display name and fact count; search matches the key or any value."""
     # Facts are one row per field, so an entity is a GROUP BY of its rows. Its display name is the first of
     # name, title, llm_title ... that it has; MAX(CASE ...) picks that field's value out of the group.
     name = "COALESCE(" + ", ".join(
         f"MAX(CASE WHEN field = '{f}' THEN json_extract(value, '$') END)" for f in NAME_FIELDS) + ")"
     sql = (f"SELECT entity_type, entity_key, {name} AS name, MIN(source_url) AS source_url, COUNT(*) AS facts"
-           " FROM facts WHERE source = ? AND valid_to IS NULL")
-    params: list = [source]
+           " FROM facts WHERE source = ? AND " + _current(as_of)[0])
+    params: list = [source, *_current(as_of)[1]]
     if entity_type:
         sql += " AND entity_type = ?"
         params.append(entity_type)
@@ -175,12 +193,19 @@ def entities(conn, source: str, entity_type=None, search=None, limit: int = 500)
     return _rows(conn, sql + " ORDER BY entity_type, entity_key LIMIT ?", params + [limit])
 
 
-def entity_facts(conn, source: str, entity_type: str, entity_key: str, history: bool = False) -> list[dict]:
-    """All facts of one entity: current only, or with history (replaced values) too."""
+def entity_facts(conn, source: str, entity_type: str, entity_key: str, history: bool = False,
+                 as_of=None) -> list[dict]:
+    """All facts of one entity: current only, or with history (replaced values) too. With as_of, as of that time."""
     sql = "SELECT * FROM facts WHERE source = ? AND entity_type = ? AND entity_key = ?"
+    params: list = [source, entity_type, entity_key]
     if not history:  # current values only; with history, closed rows (valid_to set) are included too
-        sql += " AND valid_to IS NULL"
-    return _rows(conn, sql + " ORDER BY field, id", (source, entity_type, entity_key))
+        cond, p = _current(as_of)
+        sql += " AND " + cond
+        params += p
+    elif as_of:  # history up to that time: nothing written later
+        sql += " AND valid_from <= ?"
+        params.append(as_of)
+    return _rows(conn, sql + " ORDER BY field, id", params)
 
 
 def fact_fields(conn, source: str) -> list[str]:
@@ -189,8 +214,9 @@ def fact_fields(conn, source: str) -> list[str]:
 
 
 def facts(conn, source: str, entity_type=None, field=None, method=None, run_id=None, source_url=None,
-          current_only=True, search=None, limit: int = 1000) -> list[dict]:
-    """Fact rows filtered by type, field, method, run, source URL, current-only and text search."""
+          current_only=True, search=None, limit: int = 1000, as_of=None) -> list[dict]:
+    """Fact rows filtered by type, field, method, run, source URL, current-only and text search.
+    With as_of, "current" means current at that time, and nothing written later is shown."""
     sql = "SELECT * FROM facts WHERE source = ?"
     params: list = [source]
     # Column names come from this fixed list, never from the user; the values go in as parameters.
@@ -200,7 +226,12 @@ def facts(conn, source: str, entity_type=None, field=None, method=None, run_id=N
             sql += f" AND {col} = ?"
             params.append(val)
     if current_only:
-        sql += " AND valid_to IS NULL"
+        cond, p = _current(as_of)
+        sql += " AND " + cond
+        params += p
+    elif as_of:
+        sql += " AND valid_from <= ?"
+        params.append(as_of)
     if search:
         sql += " AND (value LIKE ? ESCAPE '\\' OR entity_key LIKE ? ESCAPE '\\')"
         params += [_like(search), _like(search)]
@@ -232,8 +263,10 @@ def hosts(conn, source: str) -> list[str]:
     return [r["host"] for r in _rows(conn, "SELECT DISTINCT host FROM documents WHERE source = ? ORDER BY 1", (source,))]
 
 
-def documents(conn, source: str, kind=None, host=None, saved=None, search=None, limit: int = 1000) -> list[dict]:
-    """One row per URL with kind, host, status, whether a copy is saved, versions and size."""
+def documents(conn, source: str, kind=None, host=None, saved=None, search=None, limit: int = 1000,
+              as_of=None) -> list[dict]:
+    """One row per URL with kind, host, status, whether a copy is saved, versions and size.
+    With as_of, only URLs first seen by a run that had started by then (status and copy stay the latest)."""
     # saved = we have a copy (current_hash set); versions = how many distinct contents we saved for the URL;
     # bytes = size of the current version.
     sql = """SELECT d.url, d.kind, d.host, d.last_status, d.current_hash IS NOT NULL AS saved,
@@ -251,6 +284,9 @@ def documents(conn, source: str, kind=None, host=None, saved=None, search=None, 
     if search:
         sql += " AND d.url LIKE ? ESCAPE '\\'"
         params.append(_like(search))
+    if as_of:
+        sql += " AND d.first_seen_run IN (SELECT run_id FROM runs WHERE started_at <= ?)"
+        params.append(as_of)
     return _rows(conn, sql + " ORDER BY d.kind, d.url LIMIT ?", params + [limit])
 
 
@@ -320,92 +356,109 @@ def find_excerpt(text: str, excerpt: str) -> tuple[int, int] | None:
 DATE_FIELDS = ("first_published_at", "llm_document_date", "pdf_created")
 
 
-def overview(conn, source: str) -> dict:
-    """Headline numbers: entities, facts, saved pages and files, last run's skips, total LLM cost of runs."""
-    one = lambda sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731  (runs a query that returns one number)
-    # Each run logs the same skipped links again, so skips are counted for the latest finished run.
-    last = one("SELECT MAX(run_id) FROM runs WHERE source = ? AND finished_at IS NOT NULL", source)
+def overview(conn, source: str, as_of=None) -> dict:
+    """Headline numbers: entities, facts, saved pages and files, last run's skips, total LLM cost of runs.
+    With as_of, everything is counted as of that time: later runs and facts are left out."""
+    def one(sql, *p):  # runs a query that returns one value (None when there is no row)
+        row = conn.execute(sql, p).fetchone()
+        return row[0] if row else None
+
+    until = as_of or "9999"  # "9999" sorts after every real timestamp, so None means "up to now"
+    # Each run logs the same skipped links again, so skips are counted for the latest finished run (by then).
+    last = one("SELECT run_id FROM runs WHERE source = ? AND finished_at IS NOT NULL AND finished_at <= ?"
+               " ORDER BY started_at DESC LIMIT 1", source, until)
     # The scraper's LLM cost is summed from every run's metrics. Ask AI cost is separate (ask_log.jsonl).
     cost = sum(json.loads(r["stats_json"] or "{}").get("llm_cost_usd", 0.0)
-               for r in _rows(conn, "SELECT stats_json FROM runs WHERE source = ?", (source,)))
+               for r in _rows(conn, "SELECT stats_json FROM runs WHERE source = ? AND started_at <= ?", (source, until)))
+    cond, p = _current(as_of)
+    # A page or file counts once we had saved a copy of it (by then).
+    saved = ("SELECT COUNT(*) FROM documents d WHERE d.source = ? AND d.kind = ? AND EXISTS"
+             " (SELECT 1 FROM snapshots s WHERE s.url = d.url AND s.fetched_at <= ?)")
     return {
         # An entity is a distinct (type, key) pair among current facts.
         "entities": one("SELECT COUNT(DISTINCT entity_type || ':' || entity_key) FROM facts"
-                        " WHERE source = ? AND valid_to IS NULL", source),
-        "facts": one("SELECT COUNT(*) FROM facts WHERE source = ? AND valid_to IS NULL", source),
-        "pages": one("SELECT COUNT(*) FROM documents WHERE source = ? AND kind = 'page' AND current_hash IS NOT NULL", source),
-        "files": one("SELECT COUNT(*) FROM documents WHERE source = ? AND kind = 'file' AND current_hash IS NOT NULL", source),
+                        f" WHERE source = ? AND {cond}", source, *p),
+        "facts": one(f"SELECT COUNT(*) FROM facts WHERE source = ? AND {cond}", source, *p),
+        "pages": one(saved, source, "page", until),
+        "files": one(saved, source, "file", until),
         "last_run": last,
         "skips_last_run": one("SELECT COUNT(*) FROM skips WHERE run_id = ?", last) if last else 0,
-        "runs": one("SELECT COUNT(*) FROM runs WHERE source = ?", source),
+        "runs": one("SELECT COUNT(*) FROM runs WHERE source = ? AND started_at <= ?", source, until),
         "llm_cost_usd": round(cost, 4),
     }
 
 
-def facts_by_type_method(conn, source: str) -> list[dict]:
+def facts_by_type_method(conn, source: str, as_of=None) -> list[dict]:
     """Current facts counted by entity type and how they were found."""
-    return _rows(conn, """SELECT entity_type, method, COUNT(*) AS n FROM facts
-                          WHERE source = ? AND valid_to IS NULL GROUP BY 1, 2 ORDER BY 1, 2""", (source,))
+    cond, p = _current(as_of)
+    return _rows(conn, f"""SELECT entity_type, method, COUNT(*) AS n FROM facts
+                           WHERE source = ? AND {cond} GROUP BY 1, 2 ORDER BY 1, 2""", (source, *p))
 
 
-def label_counts(conn, source: str, entity_type: str, field: str) -> list[dict]:
+def label_counts(conn, source: str, entity_type: str, field: str, as_of=None) -> list[dict]:
     """How many entities have each value of a text field, e.g. projects per phase."""
     # Values are stored as JSON; json_extract gives the plain text. Lists and objects are left out.
-    return _rows(conn, """SELECT json_extract(value, '$') AS value, COUNT(*) AS n FROM facts
-                          WHERE source = ? AND entity_type = ? AND field = ? AND valid_to IS NULL
-                            AND json_type(value) = 'text'
-                          GROUP BY 1 ORDER BY n DESC, value""", (source, entity_type, field))
+    cond, p = _current(as_of)
+    return _rows(conn, f"""SELECT json_extract(value, '$') AS value, COUNT(*) AS n FROM facts
+                           WHERE source = ? AND entity_type = ? AND field = ? AND {cond}
+                             AND json_type(value) = 'text'
+                           GROUP BY 1 ORDER BY n DESC, value""", (source, entity_type, field, *p))
 
 
-def files_per_host(conn, source: str) -> list[dict]:
-    """Saved files counted by host."""
-    return _rows(conn, """SELECT host, COUNT(*) AS n FROM documents
-                          WHERE source = ? AND kind = 'file' AND current_hash IS NOT NULL
-                          GROUP BY host ORDER BY n DESC""", (source,))
+def files_per_host(conn, source: str, as_of=None) -> list[dict]:
+    """Saved files counted by host (with as_of: files we had a copy of by then)."""
+    return _rows(conn, """SELECT host, COUNT(*) AS n FROM documents d
+                          WHERE source = ? AND kind = 'file'
+                            AND EXISTS (SELECT 1 FROM snapshots s WHERE s.url = d.url AND s.fetched_at <= ?)
+                          GROUP BY host ORDER BY n DESC""", (source, as_of or "9999"))
 
 
-def entities_per_year(conn, source: str) -> list[dict]:
+def entities_per_year(conn, source: str, as_of=None) -> list[dict]:
     """Entities per year of their best date (publish date, else the date in the document, else PDF metadata)."""
     # Inner query: one row per entity with the year (first 4 characters) of its best date field.
     # Outer query: count entities per year and type, keeping only real years.
     best = "COALESCE(" + ", ".join(
         f"MAX(CASE WHEN field = '{f}' THEN substr(json_extract(value, '$'), 1, 4) END)" for f in DATE_FIELDS) + ")"
+    cond, p = _current(as_of)
     return _rows(conn, f"""SELECT year, entity_type, COUNT(*) AS n FROM (
                                SELECT entity_type, {best} AS year FROM facts
-                               WHERE source = ? AND valid_to IS NULL GROUP BY entity_type, entity_key)
+                               WHERE source = ? AND {cond} GROUP BY entity_type, entity_key)
                            WHERE year GLOB '[12][0-9][0-9][0-9]' GROUP BY year, entity_type ORDER BY year, entity_type""",
-                 (source,))
+                 (source, *p))
 
 
-def locations(conn, source: str) -> list[dict]:
+def locations(conn, source: str, as_of=None) -> list[dict]:
     """Every entity with a location fact, with its name, for a map."""
     # The location fact is {"lat": .., "lon": ..}; json_extract pulls each number out. The name is looked up
     # from the same entity's name or title fact.
     name = "COALESCE(" + ", ".join(
         f"(SELECT json_extract(n.value, '$') FROM facts n WHERE n.source = f.source AND n.entity_type = f.entity_type"
-        f" AND n.entity_key = f.entity_key AND n.field = '{x}' AND n.valid_to IS NULL)" for x in NAME_FIELDS[:2]) + ")"
+        f" AND n.entity_key = f.entity_key AND n.field = '{x}' AND {_current(as_of, 'n')[0]})" for x in NAME_FIELDS[:2]) + ")"
     return _rows(conn, f"""SELECT f.entity_type, f.entity_key, {name} AS name,
                                   json_extract(f.value, '$.lat') AS lat, json_extract(f.value, '$.lon') AS lon
-                           FROM facts f WHERE f.source = ? AND f.field = 'location' AND f.valid_to IS NULL
-                             AND json_extract(f.value, '$.lat') IS NOT NULL ORDER BY f.entity_key""", (source,))
+                           FROM facts f WHERE f.source = ? AND f.field = 'location' AND {_current(as_of, 'f')[0]}
+                             AND json_extract(f.value, '$.lat') IS NOT NULL ORDER BY f.entity_key""",
+                 # parameters in the order they appear: the two name lookups, then source, then f's time window
+                 (*_current(as_of, "n")[1] * 2, source, *_current(as_of, "f")[1]))
 
 
 # ---------- data dictionary ----------
 
-def field_stats(conn, source: str) -> list[dict]:
+def field_stats(conn, source: str, as_of=None) -> list[dict]:
     """Every field per entity type and method: how many entities have it, share of all entities of that type,
     and one example value with its locator."""
     # cur = current facts; agg = per field: how many entities have it, and the first row as an example;
     # tot = how many entities of each type exist, so coverage = entities with the field / all of that type.
-    rows = _rows(conn, """
-        WITH cur AS (SELECT * FROM facts WHERE source = ? AND valid_to IS NULL),
+    cond, p = _current(as_of)
+    rows = _rows(conn, f"""
+        WITH cur AS (SELECT * FROM facts WHERE source = ? AND {cond}),
              agg AS (SELECT entity_type, field, method, COUNT(DISTINCT entity_key) AS entities, MIN(id) AS first_id
                      FROM cur GROUP BY entity_type, field, method),
              tot AS (SELECT entity_type, COUNT(DISTINCT entity_key) AS n FROM cur GROUP BY entity_type)
         SELECT a.entity_type, a.field, a.method, a.entities, ROUND(a.entities * 1.0 / t.n, 3) AS coverage,
                f.value AS example, f.locator
         FROM agg a JOIN tot t ON t.entity_type = a.entity_type JOIN facts f ON f.id = a.first_id
-        ORDER BY a.entity_type, a.method DESC, a.field""", (source,))
+        ORDER BY a.entity_type, a.method DESC, a.field""", (source, *p))
     for r in rows:  # make the example readable and short
         value = json.loads(r["example"])
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)

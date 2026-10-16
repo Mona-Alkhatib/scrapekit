@@ -19,7 +19,7 @@ st.caption("Each fact is one field of one thing (a project, news item, document 
 st.caption(common.METHOD_EXPLAINED)
 
 # 1. One table per entity type: field, meaning (from the code and the Source config), how found, coverage, example.
-stats = q.field_stats(conn, source)
+stats = q.field_stats(conn, source, as_of=common.as_of())
 for kind in sorted({s["entity_type"] for s in stats}):
     rows = [s for s in stats if s["entity_type"] == kind]
     st.subheader(f"{kind} ({len(rows)} fields)")

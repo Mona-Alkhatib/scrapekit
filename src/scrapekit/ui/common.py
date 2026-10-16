@@ -42,6 +42,12 @@ def open_conn(path: str):
     return q.open_db(Path(path))
 
 
+def as_of() -> str | None:
+    """The time the data is shown at: the end of the run picked in the sidebar, or None for the latest data.
+    Pages pass it to every query that reads facts, so all of them show the same moment."""
+    return st.session_state.get("as_of")
+
+
 def require_data():
     """Returns (connection, source). Shows a friendly message and stops the page if there is no data."""
     path = db_path()

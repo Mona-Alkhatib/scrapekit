@@ -183,3 +183,17 @@ def test_overview_shows_ask_ai_cost_separately(db):  # noqa: F811
     at = AppTest.from_file(str(Path(__file__).parent.parent / "src/scrapekit/ui/views/overview.py"), default_timeout=30).run()
     metrics = {m.label: m.value for m in at.metric}
     assert metrics["LLM cost (runs)"] == "$0.01" and metrics["Ask AI cost"] == "$0.0015"
+
+
+def test_ask_ai_answers_about_the_run_picked_in_the_sidebar(db):  # noqa: F811
+    from scrapekit.ui import queries as q
+    first = q.as_of_runs(q.open_db(db), "demo")[-1]["finished_at"]
+    sql = {"sql": "SELECT value FROM current_facts WHERE field = 'phase'", "explanation": ""}
+    latest = ask.Asker(FakeChat(sql, {"answer": "-"}), db, docs={}, source="demo").ask("phase?")
+    older = ask.Asker(FakeChat(sql, {"answer": "-"}), db, docs={}, source="demo", as_of=first).ask("phase?")
+    assert latest.rows == [["Construction"]] and older.rows == [["Planning"]]
+
+
+def test_as_of_must_be_a_timestamp(db):  # noqa: F811
+    with pytest.raises(ValueError):
+        ask.reader(db, as_of="2026-01-01' OR 1=1 --")

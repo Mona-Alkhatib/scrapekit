@@ -356,6 +356,7 @@ scrapekit run   ──writes──▶  data/scrapekit.db  +  data/raw/<hash>
 | One query module as the boundary | Pages never write SQL, so queries are tested on their own. This module is the API: putting FastAPI in front of it later is a thin wrapper, not a rewrite. |
 | No HTTP API yet | One local consumer does not need one. Add it when a second consumer (another service, a hosted UI) appears. |
 | Streamlit | See section 3. |
+| View the data as of a run | A sidebar choice (default: latest) shows the data as a finished run left it, on every page and in Ask AI. Runs store only changes, so hiding one run would leave holes (its new facts gone, the values it replaced still closed). Instead every query takes a time and keeps facts with `valid_from <= t` and `valid_to` empty or later. |
 | Click-through instead of many screens | Every table row opens its details: run → its skips and changed facts; entity → facts → provenance → history; URL → versions → raw copy → facts. |
 | Shows one database | You choose the data folder when you start the app (`scrapekit ui --data-dir data/live`), and the sidebar shows its path. There is no dropdown to switch databases, so you always know which data you are looking at. |
 | Not tied to CreateTO | Everything specific to the site (field explanations, label charts, example questions) comes from its config in `sources/createto.py`. The UI code never names the site, and a test checks this, so a new source needs no UI changes. If a database holds more than one source, a source picker appears in the sidebar. |

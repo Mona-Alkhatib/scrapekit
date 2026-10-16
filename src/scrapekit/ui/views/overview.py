@@ -15,7 +15,8 @@ from scrapekit.ui import ask, common, queries as q
 st.title("Overview")
 conn, source = common.require_data()
 # 1. Headline numbers: one query for the data, one read of the Ask AI log for its cost.
-o = q.overview(conn, source)
+as_of = common.as_of()  # None = latest; else the end of the run picked in the sidebar
+o = q.overview(conn, source, as_of=as_of)
 
 asked = ask.log_totals(ask.log_path(common.db_path()), source)
 cols = st.columns(7)
@@ -52,15 +53,15 @@ with left:
     st.subheader("Facts: copied or read by AI")
     st.caption(common.METHOD_EXPLAINED)
     bars([{**r, "method": common.METHOD_LABELS.get(r["method"], r["method"])}
-          for r in q.facts_by_type_method(conn, source)], "entity_type", color="method")
+          for r in q.facts_by_type_method(conn, source, as_of=as_of)], "entity_type", color="method")
 with right:
     st.subheader("Entities per year")
     st.caption(f"By best date: publish date, else the date in the document, else PDF metadata. "
                f"The last 5 years start in {date.today().year - 5}.")
-    bars(q.entities_per_year(conn, source), "year", color="entity_type")
+    bars(q.entities_per_year(conn, source, as_of=as_of), "year", color="entity_type")
 
 # 3. Map of every entity that has a location fact (any source that extracts locations gets one).
-places = q.locations(conn, source)
+places = q.locations(conn, source, as_of=as_of)
 if places:
     st.subheader(f"Map ({len(places)} entities with a location)")
     st.map(pd.DataFrame(places), latitude="lat", longitude="lon", size=40)
@@ -70,19 +71,19 @@ with left:
     config = SOURCES.get(source)
     for kind, field in (config.overview_labels if config else ()):  # the site's own label fields, from its config
         st.subheader(f"{kind} by {field}")
-        bars(q.label_counts(conn, source, kind, field), "value", horizontal=True)
+        bars(q.label_counts(conn, source, kind, field, as_of=as_of), "value", horizontal=True)
     st.subheader("Files per host")
     st.caption("Files are downloaded from any host; pages are only crawled on the source's own site.")
-    bars(q.files_per_host(conn, source), "host", horizontal=True)
+    bars(q.files_per_host(conn, source, as_of=as_of), "host", horizontal=True)
 with right:
     st.subheader("PDF document types (LLM)")
-    bars(q.label_counts(conn, source, "document", "llm_doc_type"), "value", horizontal=True)
+    bars(q.label_counts(conn, source, "document", "llm_doc_type", as_of=as_of), "value", horizontal=True)
     st.subheader("Skipped links in the last run, by reason")
     st.caption("off_domain = a link to another website (we only crawl this site's pages, but download files from anywhere).")
     bars(q.skip_counts(conn, source, o["last_run"]) if o["last_run"] else [], "reason", horizontal=True)
 
 # 4. Runs side by side, oldest first: requests (304 vs other), minutes and LLM cost.
-runs = q.runs(conn, source)
+runs = [r for r in q.runs(conn, source) if not as_of or r["started_at"] <= as_of]  # up to the run picked in the sidebar
 if runs:
     st.subheader("Runs compared")
     st.caption("A repeat run should be mostly 304 (unchanged, no body downloaded) and cost $0.")
