@@ -357,7 +357,8 @@ scrapekit run   ──writes──▶  data/scrapekit.db  +  data/raw/<hash>
 | No HTTP API yet | One local consumer does not need one. Add it when a second consumer (another service, a hosted UI) appears. |
 | Streamlit | See section 3. |
 | Click-through instead of many screens | Every table row opens its details: run → its skips and changed facts; entity → facts → provenance → history; URL → versions → raw copy → facts. |
-| Works for any source | The sidebar lists the sources and databases it finds; nothing in `ui/` names a website (the same guard test covers it). |
+| One database per session | The app opens the database chosen at start (`--data-dir`) and shows its path; no database picker, so a reviewer always knows which data they are looking at. |
+| Works for any source | The sidebar lists the sources in that database; nothing in `ui/` names a website (the same guard test covers it). |
 
 **Provenance panel.** For any fact: source URL, method (rules or LLM), locator (JSON path, PDF metadata key, or page numbers), run, valid from / to, and the content hash of the snapshot it was read from. For an LLM fact the panel shows the saved text of the cited PDF page with the quote highlighted, so the reader checks the claim in one click. If the quote is split by a page footer, the page is shown with a note instead.
 

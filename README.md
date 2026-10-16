@@ -137,7 +137,8 @@ A local, read-only app for engineers who consume the data: see what was scraped 
 
 ```bash
 uv sync --extra ui                                # Streamlit, only needed for the UI
-uv run scrapekit ui --data-dir data/submission    # opens http://localhost:8501
+uv run scrapekit ui                               # opens http://localhost:8501 on data/ (where `scrapekit run` writes)
+uv run scrapekit ui --data-dir <folder>           # or any other data folder
 ```
 
 | Page | What you can do |

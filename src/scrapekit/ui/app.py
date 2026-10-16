@@ -1,6 +1,6 @@
 """Entry point: `scrapekit ui` runs `streamlit run` on this file.
 
-Sidebar: which database and which source. Pages: runs, entities, facts, pages & files, skips.
+Sidebar: the database in use (set by --data-dir) and the source. Pages: runs, entities, facts, pages & files, skips.
 """
 
 from pathlib import Path
@@ -13,15 +13,15 @@ st.set_page_config(page_title="scrapekit data browser", layout="wide")
 
 with st.sidebar:
     st.header("scrapekit")
-    found = sorted(str(p) for root in ("data", "examples") for p in Path(root).glob("**/scrapekit.db"))
-    default = str(common.db_path())
-    options = sorted(set(found) | {default})
-    st.session_state["db_path"] = st.selectbox("Database", options, index=options.index(default),
-                                               help="Each data folder holds one SQLite database plus raw/ copies.")
-    if Path(st.session_state["db_path"]).exists():
-        names = q.sources(common.open_conn(st.session_state["db_path"]))
-        if names:
+    path = common.db_path()  # one database, chosen when the app starts: scrapekit ui --data-dir <folder>
+    st.caption(f"Data: `{path}`")
+    if path.exists():
+        names = q.sources(common.open_conn(str(path)))
+        if len(names) > 1:
             st.session_state["source"] = st.selectbox("Source", names)
+        elif names:
+            st.session_state["source"] = names[0]
+            st.caption(f"Source: {names[0]}")
     st.caption("Read-only. Nothing here changes the data.")
 
 views = Path(__file__).parent / "views"

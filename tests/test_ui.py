@@ -339,3 +339,11 @@ def test_field_stats(conn):
     phase = stats[("project", "phase")]
     assert (phase["entities"], phase["coverage"], phase["method"]) == (1, 1.0, "parse")
     assert phase["example"] == "Construction" and phase["locator"] == "json phase"
+
+
+def test_app_shows_one_database_without_a_picker(db):
+    os.environ["SCRAPEKIT_UI_DB"] = str(db)
+    at = AppTest.from_file(str(UI / "app.py"), default_timeout=30).run()
+    assert not at.exception
+    assert not [s for s in at.sidebar.selectbox if s.label == "Database"]
+    assert any(str(db.name) in c.value for c in at.sidebar.caption)

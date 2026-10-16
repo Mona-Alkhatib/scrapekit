@@ -16,7 +16,7 @@ MAX_INLINE_PDF_BYTES = 15_000_000  # bigger PDFs are slow to embed in the browse
 
 
 def db_path() -> Path:
-    return Path(st.session_state.get("db_path") or os.environ.get(DB_ENV, "data/scrapekit.db"))
+    return Path(os.environ.get(DB_ENV, "data/scrapekit.db"))
 
 
 @st.cache_resource
